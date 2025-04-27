@@ -9,5 +9,6 @@
             "database": "autolab_db",
             "username": "autolab_user"
         }
-    ]
+    ],
+    "python.analysis.typeCheckingMode": "basic"
 }
