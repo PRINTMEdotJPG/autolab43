@@ -1,99 +1,100 @@
-# views.py
-
-from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
-from django.views.decorators.http import require_POST
-from django.contrib.auth.models import User
+from django.shortcuts import get_object_or_404
+from .models import Users, Experiments, EquipmentData, Results
+from .imitate_module.sensors_simulator import ExperimentSimulator  # Импорт модуля симуляции
+import json
 import logging
-from .imitate_module.sensors_simulator import ExperimentSimulator
-from .models import Experiments, EquipmentData, Results
-from django.db import transaction
-from django.core.validators import MinValueValidator, MaxValueValidator
 
-# Настройка логирования
 logger = logging.getLogger(__name__)
 
-@require_POST
+# Глобальный флаг для переключения режима
+USE_SIMULATION = True  # Переключение между реальными и имитированными данными
+
 def run_simulation(request, user_id):
     """
-    Обработчик API для запуска имитации эксперимента.
-    URL: /experiment/<int:user_id>/
+    Обработчик эксперимента с поддержкой переключения режимов
+    GET /simexp/<user_id>/?simulate=false для отключения симуляции
     """
     try:
-        # Получаем пользователя или возвращаем 404
-        user = get_object_or_404(User, pk=user_id)
-    except Exception as e:
-        logger.error(f"Пользователь с id {user_id} не найден")
-        return JsonResponse({'status': 'error', 'message': 'Пользователь не найден'}, status=404)
-
-    try:
-        # Инициализируем симулятор эксперимента
-        group_name = user.groups.first().name if user.groups.exists() else "DefaultGroup"
-        simulator = ExperimentSimulator(user_id=user_id, group_name=group_name)
-        result = simulator.run_experiment()
-
-        # Начинаем транзакцию для сохранения данных
-        with transaction.atomic():
-            # Создаем запись эксперимента
-            experiment = Experiments.objects.create(
-                user=user,
-                temperature=result['temperature'],
-                tube_length=simulator.arduino.tube_length  # добавьте tube_length в VirtualArduino
+        # Проверка и парсинг параметров
+        simulate = request.GET.get('simulate', str(USE_SIMULATION)).lower() == 'true'
+        user = get_object_or_404(Users, id=user_id)
+        
+        # Генерация или получение данных
+        if simulate:
+            experiment_data = simulate_experiment(user)
+        else:
+            # Здесь можно добавить логику для реальных данных
+            return JsonResponse(
+                {'status': 'error', 'message': 'Режим реальных данных не реализован'},
+                status=501
             )
 
-            # Сохраняем данные оборудования
-            equipment_data_objects = []
-            time_ms = 0  # Начальное время
-            time_step = 10  # Шаг времени между измерениями в миллисекундах
-
-            for data in result['sensor_data']:
-                frequency = data['frequency']
-                positions = data['positions'][:100]  # Берем первые 100 точек
-                adc_values = data['adc_values'][:100]
-                voltage = simulator.arduino.voltage  # Добавьте voltage в VirtualArduino
-
-                for pos, adc in zip(positions, adc_values):
-                    equipment_data = EquipmentData(
-                        experiment=experiment,
-                        time_ms=time_ms,
-                        microphone_signal=int(adc),
-                        tube_position=pos,
-                        voltage=voltage
-                    )
-                    equipment_data_objects.append(equipment_data)
-                    time_ms += time_step  # Увеличиваем время
-
-            # Сохраняем данные в базу данных
-            EquipmentData.objects.bulk_create(equipment_data_objects)
-
-            # Сохраняем результаты эксперимента
-            gamma_reference = 1.4  # Эталонное значение γ
-            gamma_calculated = result['gamma_calculated']
-            error_percent = result['error_percent']
-            status = 'success' if error_percent <= 5 else 'fail'
-
-            results = Results.objects.create(
-                experiment=experiment,
-                gamma_calculated=gamma_calculated,
-                gamma_reference=gamma_reference,
-                error_percent=error_percent,
-                status=status,
-                detailed_results=result
-            )
-
-        # Формируем ответ
-        response_data = {
-            'status': status,
+        # Сохранение результатов
+        experiment = save_experiment_data(user, experiment_data)
+        
+        return JsonResponse({
+            'status': 'success',
+            'user_id': user.id,
             'experiment_id': experiment.id,
-            'gamma': gamma_calculated,
-            'error_percent': error_percent,
-            'frequencies_used': simulator.frequencies_used,
-            'temperature': result['temperature'],
-            'resonance_positions': result['resonance_positions']
-        }
-        logger.info(f"Эксперимент {experiment.id} успешно сохранен")
-        return JsonResponse(response_data, status=200)
+            'gamma': experiment_data['gamma_calculated'],
+            'error_percent': experiment_data['error_percent'],
+            'simulation_used': simulate
+        })
 
     except Exception as e:
-        logger.exception("Ошибка при запуске симуляции эксперимента")
-        return JsonResponse({'status': 'error', 'message': 'Внутренняя ошибка сервера'}, status=500)
+        logger.error(f"Ошибка в run_simulation: {str(e)}", exc_info=True)
+        return JsonResponse(
+            {'status': 'error', 'message': str(e)},
+            status=400
+        )
+
+def simulate_experiment(user):
+    """Запуск имитации эксперимента с реалистичными параметрами"""
+    simulator = ExperimentSimulator(
+        user_id=user.id,
+        group_name=user.group_name
+    )
+    
+    # Генерация случайных но реалистичных частот
+    base_freq = random.choice([1500, 2000, 2500, 3000])
+    frequencies = [
+        base_freq,
+        base_freq + random.randint(500, 1000),
+        base_freq + random.randint(1000, 2000)
+    ]
+    
+    return simulator.run_experiment(frequencies=frequencies)
+
+def save_experiment_data(user, experiment_data):
+    """Сохранение данных эксперимента в БД"""
+    # Создание основного объекта эксперимента
+    experiment = Experiments.objects.create(
+        user=user,
+        temperature=experiment_data['temperature'],
+        tube_length=1.0
+    )
+    
+    # Пакетное сохранение данных оборудования
+    equipment_records = [
+        EquipmentData(
+            experiment=experiment,
+            time_ms=item['time_ms'],
+            microphone_signal=item['microphone_signal'],
+            tube_position=item['tube_position'],
+            voltage=item.get('voltage', 5.0)
+        ) for item in experiment_data['sensor_data'][:100]  # Сохраняем первые 100 точек
+    ]
+    EquipmentData.objects.bulk_create(equipment_records)
+    
+    # Сохранение результатов
+    Results.objects.create(
+        experiment=experiment,
+        gamma_calculated=experiment_data['gamma_calculated'],
+        gamma_reference=experiment_data['gamma_reference'],
+        error_percent=experiment_data['error_percent'],
+        status=experiment_data['status'],
+        detailed_results=experiment_data
+    )
+    
+    return experiment
