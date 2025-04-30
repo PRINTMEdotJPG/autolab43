@@ -1,16 +1,125 @@
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
-from .models import Users, Experiments, EquipmentData, Results
+from django.shortcuts import get_object_or_404, render
+from django.shortcuts import render, redirect
+from django.http import HttpResponse, HttpResponseForbidden
+from django.contrib.auth import login as auth_login  # Переименовываем для ясност
+from django.contrib import messages
+from .models import User, Experiments, EquipmentData, Results
 from .imitate_module.sensors_simulator import ExperimentSimulator
 import json
 import logging
 import random
 from typing import Dict, Any
+from django.views import View
+from .forms import StudentLoginForm, TeacherLoginForm
+from django.contrib.auth.decorators import login_required
+
 
 logger = logging.getLogger(__name__)
 
 # Глобальный флаг для переключения режима
 USE_SIMULATION = True
+
+@login_required
+def home_view(request):
+    context = {}
+    
+    if request.user.role == 'student':
+        context.update({
+            'user': request.user,
+            'full_name': request.user.full_name,
+            'group_name': request.user.group_name,
+            'role': request.user.get_role_display(),
+        })
+    elif request.user.role == 'teacher':
+        # Получаем группы и студентов для каждой группы
+        groups_with_students = []
+        groups = User.objects.filter(role='student').values_list(
+            'group_name', flat=True
+        ).distinct()
+        
+        for group in groups:
+            students = User.objects.filter(
+                role='student',
+                group_name=group
+            ).order_by('full_name')
+            groups_with_students.append({
+                'name': group,
+                'students': students
+            })
+        
+        context.update({
+            'groups_with_students': groups_with_students,
+            'is_teacher': True,
+        })
+    
+    return render(request, 'home.html', context)
+
+@login_required
+def group_students_view(request, group_name):
+    if request.user.role != 'teacher':
+        return HttpResponseForbidden()
+    
+    students = User.objects.filter(
+        role='student',
+        group_name=group_name
+    ).order_by('full_name')
+    
+    return render(request, 'group_students.html', {
+        'group_name': group_name,
+        'students': students
+    })
+
+class LoginChoiceView(View):
+    def get(self, request):
+        return render(request, 'auth/login_choice.html')
+
+class StudentLoginView(View):
+    def get(self, request):
+        form = StudentLoginForm()
+        return render(request, 'auth/student_login.html', {'form': form})
+
+    def post(self, request):
+        form = StudentLoginForm(data=request.POST)
+        if form.is_valid():
+            user = form.get_user()
+            auth_login(request, user)  # Используем переименованную функцию
+            messages.success(request, "Вы успешно вошли в систему!")
+            return redirect('home')  # Замените 'home' на ваш URL
+            
+        messages.error(request, "Ошибка входа. Проверьте введенные данные.")
+        return render(request, 'auth/student_login.html', {'form': form})
+
+class TeacherLoginView(View):
+    """Представление для входа преподавателей"""
+    
+    def get(self, request):
+        """Обработка GET-запроса - отображение формы входа"""
+        form = TeacherLoginForm()
+        return render(request, 'auth/teacher_login.html', {
+            'form': form,
+            'user_type': 'teacher'  # Добавляем тип пользователя для шаблона
+        })
+
+    def post(self, request):
+        """Обработка POST-запроса - проверка данных и вход"""
+        form = TeacherLoginForm(data=request.POST)
+        
+        if form.is_valid():
+            user = form.get_user()
+            auth_login(request, user)
+            messages.success(request, f"Добро пожаловать, {user.full_name}!")
+            return redirect('home')  # Используем имя URL из настроек
+            
+        # Если форма невалидна
+        messages.error(
+            request,
+            "Ошибка входа. Проверьте email и пароль."
+        )
+        return render(request, 'auth/teacher_login.html', {
+            'form': form,
+            'user_type': 'teacher'
+        })
 
 def run_simulation(request, user_id: int) -> JsonResponse:
     """
@@ -20,7 +129,7 @@ def run_simulation(request, user_id: int) -> JsonResponse:
     try:
         # Проверка и парсинг параметров
         simulate = request.GET.get('simulate', str(USE_SIMULATION)).lower() == 'true'
-        user = get_object_or_404(Users, id=user_id)
+        user = get_object_or_404(User, id=user_id)
         
         # Генерация или получение данных
         if simulate:
@@ -53,7 +162,7 @@ def run_simulation(request, user_id: int) -> JsonResponse:
             status=400
         )
 
-def simulate_experiment(user: Users) -> Dict[str, Any]:
+def simulate_experiment(user: User) -> Dict[str, Any]:
     """Запуск имитации эксперимента с проверкой структуры"""
     simulator = ExperimentSimulator(
         user_id=user.id,
@@ -72,7 +181,7 @@ def simulate_experiment(user: Users) -> Dict[str, Any]:
     
     return experiment_data
 
-def save_experiment_data(user: Users, experiment_data: Dict[str, Any]) -> Experiments:
+def save_experiment_data(user: User, experiment_data: Dict[str, Any]) -> Experiments:
     """Сохранение данных эксперимента в БД"""
     # Проверка наличия обязательных полей
     required_fields = ['temperature', 'gamma_calculated', 'gamma_reference', 

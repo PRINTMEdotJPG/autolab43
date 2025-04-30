@@ -1,0 +1,15 @@
+/* Стили для карточек групп */
+.card {
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    font-weight: bold;
+}
+
+/* Стили для таблицы студентов */
+.table {
+    margin-top: 20px;
+}

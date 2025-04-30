@@ -1,12 +1,35 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 
 class UserManager(BaseUserManager):
+    """
+    Кастомный менеджер пользователей для модели User.
+    Реализует методы создания обычных пользователей, суперпользователей,
+    преподавателей и студентов.
+    """
+    
     def create_superuser(self, email, full_name, password=None, **extra_fields):
+        """
+        Создает и возвращает суперпользователя с указанными email, ФИО и паролем.
+        
+        Args:
+            email (str): Email суперпользователя
+            full_name (str): Полное имя пользователя
+            password (str, optional): Пароль. Defaults to None.
+            
+        Returns:
+            User: Созданный суперпользователь
+            
+        Raises:
+            ValueError: Если is_staff или is_superuser не установлены в True
+        """
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('role', 'teacher')
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
@@ -15,52 +38,157 @@ class UserManager(BaseUserManager):
 
         return self._create_user(email, full_name, password, **extra_fields)
 
-    def _create_user(self, email, full_name, password, **extra_fields):
+    def create_teacher(self, email, full_name, password=None, **extra_fields):
+        """
+        Создает и возвращает пользователя с ролью преподавателя.
+        
+        Args:
+            email (str): Email преподавателя
+            full_name (str): Полное имя преподавателя
+            password (str, optional): Пароль. Defaults to None.
+            
+        Returns:
+            User: Созданный пользователь с ролью преподавателя
+        """
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('role', 'teacher')
+        return self._create_user(email, full_name, password, **extra_fields)
+
+    def create_student(self, full_name, group_name, password=None, **extra_fields):
+        """
+        Создает и возвращает пользователя с ролью студента.
+        Автоматически генерирует email, если он не предоставлен.
+        
+        Args:
+            full_name (str): Полное имя студента
+            group_name (str): Название учебной группы
+            password (str, optional): Пароль. Defaults to None.
+            
+        Returns:
+            User: Созданный пользователь с ролью студента
+        """
+        extra_fields.setdefault('is_staff', False)
+        extra_fields.setdefault('role', 'student')
+        # Генерируем email на основе имени и группы, если не предоставлен
+        if 'email' not in extra_fields:
+            extra_fields['email'] = f"{full_name.replace(' ', '.').lower()}.{group_name.lower()}@example.com"
+        return self._create_user(extra_fields['email'], full_name, password, group_name=group_name, **extra_fields)
+
+    def _create_user(self, email, full_name, password, group_name=None, **extra_fields):
+        """
+        Внутренний метод для создания пользователя.
+        Выполняет нормализацию email и сохранение пользователя.
+        
+        Args:
+            email (str): Email пользователя
+            full_name (str): Полное имя пользователя
+            password (str): Пароль
+            group_name (str, optional): Название группы. Defaults to None.
+            
+        Returns:
+            User: Созданный пользователь
+            
+        Raises:
+            ValueError: Если email не указан
+        """
         if not email:
             raise ValueError('The Email must be set')
         email = self.normalize_email(email)
-        user = self.model(email=email, full_name=full_name, **extra_fields)
+        user = self.model(email=email, full_name=full_name, group_name=group_name, **extra_fields)
         user.set_password(password)
         user.save()
         return user
 
-class Users(AbstractUser):
+
+class User(AbstractBaseUser, PermissionsMixin):
+    """
+    Кастомная модель пользователя для системы аутентификации.
+    Заменяет стандартную модель пользователя Django.
+    Поддерживает две роли: студент и преподаватель.
+    """
+    
+    # Выбор ролей пользователя
     ROLE_CHOICES = [
         ('student', 'Студент'),
         ('teacher', 'Преподаватель'),
     ]
     
+    # Поля модели
     full_name = models.CharField(
         "ФИО", 
         max_length=100, 
         blank=False,
+        help_text="Полное имя пользователя (только кириллица)"
     )
+    
+    # Отключаем стандартное поле username
     username = None
-    email = models.EmailField(unique=True, verbose_name="Email")
-    group_name = models.CharField(max_length=20, verbose_name="Группа")
+    
+    email = models.EmailField(
+        unique=True, 
+        verbose_name="Email",
+        help_text="Уникальный email пользователя"
+    )
+
+    
+    
+    group_name = models.CharField(
+        max_length=20, 
+        verbose_name="Группа",
+        blank=True,  # Для преподавателей может быть пустым
+        null=True,
+        help_text="Название учебной группы (кириллица + цифры)"
+    )
+    
     role = models.CharField(
         max_length=10,
         choices=ROLE_CHOICES,
         default='student',
-        verbose_name="Роль"
+        verbose_name="Роль",
+        help_text="Роль пользователя в системе"
+    )
+    
+    is_staff = models.BooleanField(
+        default=False,
+        help_text="Определяет, может ли пользователь входить в админ-панель"
+    )
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Активен ли пользователь"
     )
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['full_name']
+    date_joined = models.DateTimeField(
+        _('date joined'), 
+        default=timezone.now,
+        editable=False
+    )
 
-    objects = UserManager()
+    # Поля для аутентификации
+    USERNAME_FIELD = 'email'  # Поле для входа в систему
+    REQUIRED_FIELDS = ['full_name']  # Обязательные поля при создании пользователя
+
+    objects = UserManager()  # Кастомный менеджер пользователей
 
     class Meta:
         verbose_name = "Пользователь"
         verbose_name_plural = "Пользователи"
+        ordering = ['full_name']
 
     def __str__(self):
-        return f"{self.full_name} ({self.group_name})"
+        """
+        Строковое представление пользователя.
+        
+        Returns:
+            str: Представление пользователя в формате "ФИО (Группа)" или "ФИО"
+        """
+        return f"{self.full_name} ({self.group_name})" if self.group_name else self.full_name
     
 
 class Experiments(models.Model):
+    # id = pk
     user = models.ForeignKey(
-        Users,
+        User,
         on_delete=models.CASCADE,
         related_name='experiments',
         verbose_name="Пользователь"

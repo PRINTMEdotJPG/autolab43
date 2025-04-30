@@ -1,7 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.utils.translation import gettext_lazy as _
 from .models import (
-    Users, 
+    User, 
     Experiments, 
     EquipmentData, 
     Results, 
@@ -40,28 +41,69 @@ class CalculationsInline(admin.TabularInline):
     fields = ('step_number', 'description', 'formula_used', 'timestamp')
     readonly_fields = ('timestamp',)
 
-@admin.register(Users)
+@admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    list_display = ('email', 'full_name', 'group_name', 'role', 'is_staff')
-    list_filter = ('role', 'is_staff', 'is_superuser', 'is_active', 'group_name')
+    # Настройки отображения в списке
+    list_display = ('email', 'full_name', 'group_name', 'role', 'is_staff', 'is_active')
+    list_display_links = ('email', 'full_name')
+    list_filter = ('role', 'is_staff', 'is_active', 'group_name')
     search_fields = ('email', 'full_name', 'group_name')
     ordering = ('email',)
+    filter_horizontal = ('groups', 'user_permissions',)
     
+    # Группировка полей в форме редактирования
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
-        ('Персональная информация', {'fields': ('full_name', 'group_name', 'role')}),
-        ('Права доступа', {
+        (_('Personal info'), {'fields': ('full_name', 'group_name', 'role')}),
+        (_('Permissions'), {
             'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
         }),
-        ('Важные даты', {'fields': ('last_login', 'date_joined')}),
+        # Убрали блок с date_joined, так как поле нередактируемое
     )
     
+    # Добавляем date_joined только для чтения в форму изменения
+    readonly_fields = ('date_joined', 'last_login')
+    
+    # Поля при создании пользователя
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
-            'fields': ('email', 'full_name', 'group_name', 'role', 'password1', 'password2'),
+            'fields': (
+                'email', 
+                'full_name',
+                'group_name',
+                'role',
+                'password1',
+                'password2',
+                'is_staff',
+                'is_active'
+            ),
         }),
     )
+    
+    # Дополнительные настройки
+    actions = ['activate_users', 'deactivate_users']
+    
+    def activate_users(self, request, queryset):
+        queryset.update(is_active=True)
+    activate_users.short_description = _("Activate selected users")
+    
+    def deactivate_users(self, request, queryset):
+        queryset.update(is_active=False)
+    deactivate_users.short_description = _("Deactivate selected users")
+    
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Дополнительные настройки формы если нужно
+        return form
+    
+    def get_fieldsets(self, request, obj=None):
+        if not obj:
+            return self.add_fieldsets
+        return super().get_fieldsets(request, obj)
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related()
 
 @admin.register(Experiments)
 class ExperimentsAdmin(admin.ModelAdmin):

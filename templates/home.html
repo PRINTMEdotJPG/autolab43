@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container">
+    {% if user.role == 'student' %}
+        <!-- Контент для студентов -->
+        <h1>Добро пожаловать, {{ full_name }}!</h1>
+        
+        <div class="user-info">
+            <p><strong>Группа:</strong> {{ group_name }}</p>
+            <p><strong>Роль:</strong> {{ role }}</p>
+        </div>
+        
+        <div class="experiment-section">
+            <h2>Эксперименты</h2>
+            <a href="" class="btn btn-primary">
+                Запустить эксперимент
+            </a>
+        </div>
+
+    {% elif user.role == 'teacher' %}
+        <!-- Контент для преподавателей -->
+        <h1>Группы студентов</h1>
+        
+        <div class="groups-list">
+            {% for group in groups_with_students %}
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h2>{{ group.name }}</h2>
+                </div>
+                <div class="card-body">
+                    <ul class="list-group">
+                        {% for student in group.students %}
+                        <li class="list-group-item">
+                            {{ student.full_name }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
