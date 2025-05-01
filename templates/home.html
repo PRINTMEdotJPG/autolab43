@@ -13,10 +13,65 @@
         
         <div class="experiment-section">
             <h2>Эксперименты</h2>
-            <a href="" class="btn btn-primary">
-                Запустить эксперимент
+            <form action="{% url 'start_experiment' %}" method="post" id="experiment-form">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary" id="start-btn">
+                    Запустить эксперимент
+                </button>
+            </form>
+            
+            <div id="loading" class="mt-2" style="display: none;">
+                <div class="spinner-border text-primary" role="status"></div>
+                <span class="ms-2">Идет проведение эксперимента...</span>
+            </div>
+            
+            <div id="messages" class="mt-3"></div>
+            
+            <script>
+                document.getElementById('experiment-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const btn = document.getElementById('start-btn');
+                    const loading = document.getElementById('loading');
+                    const messagesDiv = document.getElementById('messages');
+                
+                    btn.disabled = true;
+                    loading.style.display = 'block';
+                    messagesDiv.innerHTML = '';
+                
+                    try {
+                        const response = await fetch("{% url 'start_experiment' %}", {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                
+                        const data = await response.json();
+                        
+                        if (!response.ok) {
+                            throw new Error(data.message || 'Ошибка сервера');
+                        }
+                
+                        if (data.status === 'success') {
+                            window.location.href = "{% url 'experiment_results' 0 %}".replace('0', data.experiment_id);
+                        } else {
+                            messagesDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+                        }
+                    } catch (error) {
+                        messagesDiv.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+                    } finally {
+                        btn.disabled = false;
+                        loading.style.display = 'none';
+                    }
+                });
+                </script>
+            
+            <a href="{% url 'download_manual' %}" class="btn btn-info" target="_blank">
+                Открыть методичку к эксперименту
             </a>
         </div>
+
 
     {% elif user.role == 'teacher' %}
         <!-- Контент для преподавателей -->

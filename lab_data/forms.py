@@ -48,3 +48,10 @@ class TeacherLoginForm(AuthenticationForm):
             except User.DoesNotExist:
                 raise forms.ValidationError("Преподаватель с таким email не найден")
         return self.cleaned_data
+    
+class StudentResultForm(forms.Form):
+    gamma = forms.FloatField(
+        label='Введите рассчитанное γ',
+        min_value=1.0,
+        max_value=2.0,
+        widget=forms.NumberInput(attrs={'step': 0.001}))

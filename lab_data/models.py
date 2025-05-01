@@ -1,30 +1,41 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.auth.models import (
+    AbstractBaseUser,
+    BaseUserManager,
+    PermissionsMixin
+)
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
 
 class UserManager(BaseUserManager):
     """
     Кастомный менеджер пользователей для модели User.
-    Реализует методы создания обычных пользователей, суперпользователей,
-    преподавателей и студентов.
+    Реализует методы создания пользователей разных типов.
     """
-    
-    def create_superuser(self, email, full_name, password=None, **extra_fields):
+
+    def create_superuser(
+        self,
+        email: str,
+        full_name: str,
+        password: str = None,
+        **extra_fields
+    ) -> 'User':
         """
-        Создает и возвращает суперпользователя с указанными email, ФИО и паролем.
-        
+        Создает и возвращает суперпользователя.
+
         Args:
-            email (str): Email суперпользователя
-            full_name (str): Полное имя пользователя
-            password (str, optional): Пароль. Defaults to None.
-            
+            email: Email суперпользователя
+            full_name: Полное имя пользователя
+            password: Пароль (опционально)
+            **extra_fields: Дополнительные поля
+
         Returns:
             User: Созданный суперпользователь
-            
+
         Raises:
-            ValueError: Если is_staff или is_superuser не установлены в True
+            ValueError: Если is_staff или is_superuser не True
         """
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
@@ -38,63 +49,101 @@ class UserManager(BaseUserManager):
 
         return self._create_user(email, full_name, password, **extra_fields)
 
-    def create_teacher(self, email, full_name, password=None, **extra_fields):
+    def create_teacher(
+        self,
+        email: str,
+        full_name: str,
+        password: str = None,
+        **extra_fields
+    ) -> 'User':
         """
-        Создает и возвращает пользователя с ролью преподавателя.
-        
+        Создает пользователя с ролью преподавателя.
+
         Args:
-            email (str): Email преподавателя
-            full_name (str): Полное имя преподавателя
-            password (str, optional): Пароль. Defaults to None.
-            
+            email: Email преподавателя
+            full_name: Полное имя преподавателя
+            password: Пароль (опционально)
+            **extra_fields: Дополнительные поля
+
         Returns:
-            User: Созданный пользователь с ролью преподавателя
+            User: Созданный преподаватель
         """
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('role', 'teacher')
         return self._create_user(email, full_name, password, **extra_fields)
 
-    def create_student(self, full_name, group_name, password=None, **extra_fields):
+    def create_student(
+        self,
+        full_name: str,
+        group_name: str,
+        password: str = None,
+        **extra_fields
+    ) -> 'User':
         """
-        Создает и возвращает пользователя с ролью студента.
-        Автоматически генерирует email, если он не предоставлен.
-        
+        Создает пользователя с ролью студента.
+
         Args:
-            full_name (str): Полное имя студента
-            group_name (str): Название учебной группы
-            password (str, optional): Пароль. Defaults to None.
-            
+            full_name: Полное имя студента
+            group_name: Название учебной группы
+            password: Пароль (опционально)
+            **extra_fields: Дополнительные поля
+
         Returns:
-            User: Созданный пользователь с ролью студента
+            User: Созданный студент
         """
         extra_fields.setdefault('is_staff', False)
         extra_fields.setdefault('role', 'student')
-        # Генерируем email на основе имени и группы, если не предоставлен
-        if 'email' not in extra_fields:
-            extra_fields['email'] = f"{full_name.replace(' ', '.').lower()}.{group_name.lower()}@example.com"
-        return self._create_user(extra_fields['email'], full_name, password, group_name=group_name, **extra_fields)
-
-    def _create_user(self, email, full_name, password, group_name=None, **extra_fields):
-        """
-        Внутренний метод для создания пользователя.
-        Выполняет нормализацию email и сохранение пользователя.
         
-        Args:
-            email (str): Email пользователя
-            full_name (str): Полное имя пользователя
-            password (str): Пароль
-            group_name (str, optional): Название группы. Defaults to None.
+        if 'email' not in extra_fields:
+            # Генерация email если не предоставлен
+            email = (
+                f"{full_name.replace(' ', '.').lower()}."
+                f"{group_name.lower()}@example.com"
+            )
+            extra_fields['email'] = email
             
+        return self._create_user(
+            extra_fields['email'],
+            full_name,
+            password,
+            group_name=group_name,
+            **extra_fields
+        )
+
+    def _create_user(
+        self,
+        email: str,
+        full_name: str,
+        password: str,
+        group_name: str = None,
+        **extra_fields
+    ) -> 'User':
+        """
+        Внутренний метод создания пользователя.
+
+        Args:
+            email: Email пользователя
+            full_name: Полное имя
+            password: Пароль
+            group_name: Название группы (опционально)
+            **extra_fields: Дополнительные поля
+
         Returns:
             User: Созданный пользователь
-            
+
         Raises:
             ValueError: Если email не указан
         """
         if not email:
             raise ValueError('The Email must be set')
+            
         email = self.normalize_email(email)
-        user = self.model(email=email, full_name=full_name, group_name=group_name, **extra_fields)
+        user = self.model(
+            email=email,
+            full_name=full_name,
+            group_name=group_name,
+            **extra_fields
+        )
         user.set_password(password)
         user.save()
         return user
@@ -102,44 +151,38 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     """
-    Кастомная модель пользователя для системы аутентификации.
+    Кастомная модель пользователя системы.
     Заменяет стандартную модель пользователя Django.
-    Поддерживает две роли: студент и преподаватель.
     """
-    
+
     # Выбор ролей пользователя
     ROLE_CHOICES = [
         ('student', 'Студент'),
         ('teacher', 'Преподаватель'),
     ]
-    
-    # Поля модели
+
+    # Основные поля модели
     full_name = models.CharField(
-        "ФИО", 
-        max_length=100, 
+        "ФИО",
+        max_length=100,
         blank=False,
         help_text="Полное имя пользователя (только кириллица)"
     )
-    
-    # Отключаем стандартное поле username
-    username = None
-    
+
     email = models.EmailField(
-        unique=True, 
+        unique=True,
         verbose_name="Email",
         help_text="Уникальный email пользователя"
     )
 
-    
-    
     group_name = models.CharField(
-        max_length=20, 
+        max_length=20,
         verbose_name="Группа",
         blank=True,  # Для преподавателей может быть пустым
         null=True,
         help_text="Название учебной группы (кириллица + цифры)"
     )
-    
+
     role = models.CharField(
         max_length=10,
         choices=ROLE_CHOICES,
@@ -147,64 +190,71 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name="Роль",
         help_text="Роль пользователя в системе"
     )
-    
+
     is_staff = models.BooleanField(
         default=False,
-        help_text="Определяет, может ли пользователь входить в админ-панель"
+        help_text="Определяет доступ к админ-панели"
     )
-    
+
     is_active = models.BooleanField(
         default=True,
         help_text="Активен ли пользователь"
     )
 
     date_joined = models.DateTimeField(
-        _('date joined'), 
+        _('date joined'),
         default=timezone.now,
         editable=False
     )
 
     # Поля для аутентификации
-    USERNAME_FIELD = 'email'  # Поле для входа в систему
-    REQUIRED_FIELDS = ['full_name']  # Обязательные поля при создании пользователя
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['full_name']
 
-    objects = UserManager()  # Кастомный менеджер пользователей
+    objects = UserManager()
 
     class Meta:
         verbose_name = "Пользователь"
         verbose_name_plural = "Пользователи"
         ordering = ['full_name']
 
-    def __str__(self):
-        """
-        Строковое представление пользователя.
-        
-        Returns:
-            str: Представление пользователя в формате "ФИО (Группа)" или "ФИО"
-        """
-        return f"{self.full_name} ({self.group_name})" if self.group_name else self.full_name
-    
+    def __str__(self) -> str:
+        """Строковое представление пользователя."""
+        return (
+            f"{self.full_name} ({self.group_name})"
+            if self.group_name
+            else self.full_name
+        )
+
 
 class Experiments(models.Model):
-    # id = pk
+    """Модель для хранения данных о проведенных экспериментах."""
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
         related_name='experiments',
         verbose_name="Пользователь"
     )
-    date = models.DateTimeField(auto_now_add=True, verbose_name="Дата эксперимента")
+    date = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата эксперимента"
+    )
     temperature = models.FloatField(verbose_name="Температура (°C)")
     tube_length = models.FloatField(verbose_name="Длина трубы (м)")
 
     class Meta:
         verbose_name = "Эксперимент"
         verbose_name_plural = "Эксперименты"
+        ordering = ['-date']
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Эксперимент #{self.id} ({self.user.full_name})"
-    
+
+
 class EquipmentData(models.Model):
+    """Модель для хранения данных с оборудования во время эксперимента."""
+
     experiment = models.ForeignKey(
         Experiments,
         on_delete=models.CASCADE,
@@ -222,15 +272,19 @@ class EquipmentData(models.Model):
     class Meta:
         verbose_name = "Данные оборудования"
         verbose_name_plural = "Данные оборудования"
+        ordering = ['time_ms']
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Данные #{self.id} (Эксперимент {self.experiment.id})"
-    
+
 
 class Results(models.Model):
+    """Модель для хранения результатов экспериментов."""
+
     STATUS_CHOICES = [
         ('success', 'Успешно'),
         ('fail', 'Неудача'),
+        ('pending', 'Ожидает проверки'),
     ]
 
     experiment = models.OneToOneField(
@@ -240,12 +294,28 @@ class Results(models.Model):
         verbose_name="Эксперимент"
     )
     gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ")
+    student_gamma = models.FloatField(
+        verbose_name="Студенческое γ",
+        null=True,
+        blank=True
+    )
     gamma_reference = models.FloatField(verbose_name="Эталонное γ")
     error_percent = models.FloatField(verbose_name="Отклонение (%)")
+    student_error = models.FloatField(
+        verbose_name="Студенческое отклонение",
+        null=True,
+        blank=True
+    )
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
+        default='pending',
         verbose_name="Статус"
+    )
+    visualization_data = models.JSONField(
+        verbose_name="Данные для визуализации",
+        null=True,
+        blank=True
     )
     detailed_results = models.JSONField(verbose_name="Детальные результаты")
 
@@ -253,11 +323,13 @@ class Results(models.Model):
         verbose_name = "Результат"
         verbose_name_plural = "Результаты"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Результат эксперимента #{self.experiment.id}"
-    
+
 
 class Protocols(models.Model):
+    """Модель для хранения протоколов экспериментов."""
+
     STATUS_CHOICES = [
         ('draft', 'Черновик'),
         ('final', 'Финальный'),
@@ -269,8 +341,14 @@ class Protocols(models.Model):
         related_name='protocols',
         verbose_name="Эксперимент"
     )
-    generated_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата генерации")
-    protocol_path = models.CharField(max_length=255, verbose_name="Путь к протоколу")
+    generated_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата генерации"
+    )
+    protocol_path = models.CharField(
+        max_length=255,
+        verbose_name="Путь к протоколу"
+    )
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
@@ -281,12 +359,15 @@ class Protocols(models.Model):
     class Meta:
         verbose_name = "Протокол"
         verbose_name_plural = "Протоколы"
+        ordering = ['-generated_at']
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Протокол #{self.id} ({self.get_status_display()})"
-    
+
 
 class Calculations(models.Model):
+    """Модель для хранения промежуточных расчетов."""
+
     experiment = models.ForeignKey(
         Experiments,
         on_delete=models.CASCADE,
@@ -295,16 +376,21 @@ class Calculations(models.Model):
     )
     step_number = models.IntegerField(verbose_name="Номер шага")
     description = models.TextField(verbose_name="Описание")
-    formula_used = models.TextField(verbose_name="Использованная формула", blank=True)
+    formula_used = models.TextField(
+        verbose_name="Использованная формула",
+        blank=True
+    )
     input_data = models.JSONField(verbose_name="Входные данные")
     output_data = models.JSONField(verbose_name="Выходные данные")
-    timestamp = models.DateTimeField(auto_now_add=True, verbose_name="Время выполнения")
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Время выполнения"
+    )
 
     class Meta:
         verbose_name = "Расчёт"
         verbose_name_plural = "Расчёты"
         ordering = ['step_number']
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Шаг #{self.step_number} (Эксперимент {self.experiment.id})"
-    
