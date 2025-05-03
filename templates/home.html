@@ -3,98 +3,289 @@
 {% block content %}
 <div class="container">
     {% if user.role == 'student' %}
-        <!-- Контент для студентов -->
+        <!-- Секция для студентов -->
         <h1>Добро пожаловать, {{ full_name }}!</h1>
         
-        <div class="user-info">
-            <p><strong>Группа:</strong> {{ group_name }}</p>
-            <p><strong>Роль:</strong> {{ role }}</p>
-        </div>
-        
-        <div class="experiment-section">
-            <h2>Эксперименты</h2>
-            <form action="{% url 'start_experiment' %}" method="post" id="experiment-form">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-primary" id="start-btn">
-                    Запустить эксперимент
+        <!-- Основной интерфейс записи -->
+        <div class="audio-experiment card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h2 class="mb-0">🔊 Акустический эксперимент</h2>
+            </div>
+            <div class="card-body">
+                <button id="recordBtn" class="btn btn-success btn-lg">
+                    <i class="bi bi-mic"></i> Начать запись
                 </button>
-            </form>
-            
-            <div id="loading" class="mt-2" style="display: none;">
-                <div class="spinner-border text-primary" role="status"></div>
-                <span class="ms-2">Идет проведение эксперимента...</span>
+                
+                <div id="statusPanel" class="mt-3">
+                    <div class="alert alert-info" id="connectionStatus">
+                        Соединение: Не подключено
+                    </div>
+                    <div class="alert alert-secondary" id="recordingStatus">
+                        Запись: Не активна
+                    </div>
+                </div>
+                
+                <div id="resultsPanel" class="mt-4" style="display:none;">
+                    <h4>Результаты анализа</h4>
+                    <div id="minimaList"></div>
+                    <canvas id="waveform" width="800" height="200"></canvas>
+                </div>
             </div>
-            
-            <div id="messages" class="mt-3"></div>
-            
-            <script>
-                document.getElementById('experiment-form').addEventListener('submit', async (e) => {
-                    e.preventDefault();
-                    const btn = document.getElementById('start-btn');
-                    const loading = document.getElementById('loading');
-                    const messagesDiv = document.getElementById('messages');
-                
-                    btn.disabled = true;
-                    loading.style.display = 'block';
-                    messagesDiv.innerHTML = '';
-                
-                    try {
-                        const response = await fetch("{% url 'start_experiment' %}", {
-                            method: 'POST',
-                            headers: {
-                                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
-                                'Content-Type': 'application/json'
-                            }
-                        });
-                
-                        const data = await response.json();
-                        
-                        if (!response.ok) {
-                            throw new Error(data.message || 'Ошибка сервера');
-                        }
-                
-                        if (data.status === 'success') {
-                            window.location.href = "{% url 'experiment_results' 0 %}".replace('0', data.experiment_id);
-                        } else {
-                            messagesDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
-                        }
-                    } catch (error) {
-                        messagesDiv.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
-                    } finally {
-                        btn.disabled = false;
-                        loading.style.display = 'none';
-                    }
-                });
-                </script>
-            
-            <a href="{% url 'download_manual' %}" class="btn btn-info" target="_blank">
-                Открыть методичку к эксперименту
-            </a>
         </div>
 
-
-    {% elif user.role == 'teacher' %}
-        <!-- Контент для преподавателей -->
-        <h1>Группы студентов</h1>
-        
-        <div class="groups-list">
-            {% for group in groups_with_students %}
-            <div class="card mb-3">
-                <div class="card-header">
-                    <h2>{{ group.name }}</h2>
-                </div>
-                <div class="card-body">
-                    <ul class="list-group">
-                        {% for student in group.students %}
-                        <li class="list-group-item">
-                            {{ student.full_name }}
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </div>
+        <!-- Журнал событий -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Журнал событий</h5>
             </div>
-            {% endfor %}
+            <div class="card-body">
+                <div id="eventLog" style="max-height: 300px; overflow-y: auto;"></div>
+            </div>
         </div>
     {% endif %}
 </div>
+
+<script>
+class AudioRecorderApp {
+    constructor() {
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        this.socket = null;
+        this.isRecording = false;
+        
+        this.recordBtn = document.getElementById('recordBtn');
+        this.connectionStatus = document.getElementById('connectionStatus');
+        this.recordingStatus = document.getElementById('recordingStatus');
+        this.eventLog = document.getElementById('eventLog');
+        this.resultsPanel = document.getElementById('resultsPanel');
+        this.minimaList = document.getElementById('minimaList');
+        this.waveformCanvas = document.getElementById('waveform');
+        
+        this.initWebSocket();
+        this.setupEventListeners();
+        this.log('Приложение инициализировано', 'info');
+    }
+    
+    initWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        this.socket = new WebSocket(`${protocol}//${window.location.host}/ws/audio/`);
+        
+        this.socket.onopen = () => {
+            this.updateConnectionStatus('success', 'Подключено');
+            this.recordBtn.disabled = false;
+            this.log('WebSocket соединение установлено', 'success');
+        };
+        
+        this.socket.onerror = (error) => {
+            this.updateConnectionStatus('danger', 'Ошибка подключения');
+            this.log(`Ошибка WebSocket: ${error.message || 'Неизвестная ошибка'}`, 'error');
+        };
+        
+        this.socket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'analysis_result') {
+                    this.showResults(data);
+                } else if (data.type === 'error') {
+                    this.log(`Ошибка сервера: ${data.message}`, 'error');
+                }
+            } catch (e) {
+                this.log(`Ошибка обработки данных: ${e}`, 'error');
+            }
+        };
+    }
+    
+    setupEventListeners() {
+        this.recordBtn.addEventListener('click', () => {
+            if (this.isRecording) {
+                this.stopRecording();
+            } else {
+                this.startRecording();
+            }
+        });
+    }
+    
+    async startRecording() {
+        try {
+            this.log('Запрос доступа к микрофону...', 'info');
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            this.audioChunks = [];
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                this.audioChunks.push(event.data);
+            };
+            
+            this.mediaRecorder.onstop = () => {
+                this.sendAudioToServer();
+                this.updateRecordingStatus('secondary', 'Запись завершена');
+            };
+            
+            this.mediaRecorder.start(100);
+            this.isRecording = true;
+            this.recordBtn.innerHTML = '<i class="bi bi-stop-circle"></i> Остановить запись';
+            this.recordBtn.classList.replace('btn-success', 'btn-danger');
+            this.updateRecordingStatus('info', 'Идет запись...');
+            this.log('Запись начата', 'success');
+            
+        } catch (error) {
+            this.log(`Ошибка записи: ${error.message}`, 'error');
+            this.updateRecordingStatus('danger', 'Ошибка записи');
+        }
+    }
+    
+    stopRecording() {
+        if (this.mediaRecorder && this.isRecording) {
+            this.mediaRecorder.stop();
+            this.isRecording = false;
+            this.recordBtn.innerHTML = '<i class="bi bi-mic"></i> Начать запись';
+            this.recordBtn.classList.replace('btn-danger', 'btn-success');
+            this.log('Запись остановлена', 'info');
+        }
+    }
+    
+    sendAudioToServer() {
+        if (this.audioChunks.length === 0) {
+            this.log('Нет данных для отправки', 'warning');
+            return;
+        }
+        
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        
+        reader.onload = () => {
+            const base64data = reader.result.split(',')[1];
+            this.socket.send(JSON.stringify({
+                type: 'audio_data',
+                data: base64data,
+                format: 'webm'
+            }));
+            this.log('Аудио данные отправлены на сервер', 'success');
+        };
+        
+        reader.readAsDataURL(audioBlob);
+    }
+    
+    showResults(data) {
+    if (!data?.minima || !data?.waveform || !data?.sample_rate || !data?.duration) {
+        this.log("Ошибка: неполные данные от сервера", "error");
+        return;
+    }
+
+    this.resultsPanel.style.display = 'block';
+    this.minimaList.innerHTML = data.minima.map(m => `
+        <div class="alert alert-success mb-2">
+            Время: ${m.time} сек, Амплитуда: ${m.amplitude.toFixed(4)}
+        </div>
+    `).join('');
+
+    this.drawWaveformWithScale(data.waveform, data.sample_rate, data.duration);
+    this.log(`Получены результаты (${data.minima.length} минимумов)`, "success");
+}
+    
+    drawWaveformWithScale(samples, sampleRate, duration) {
+    const canvas = this.waveformCanvas;
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = 30;
+
+    // Очистка холста
+    ctx.clearRect(0, 0, width, height);
+
+    // Оси и подписи
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding, height - padding);
+    ctx.lineTo(width - padding, height - padding);
+    ctx.moveTo(padding, padding);
+    ctx.lineTo(padding, height - padding);
+    ctx.stroke();
+
+    // Подписи оси X (время)
+    ctx.fillStyle = '#000';
+    ctx.font = '12px Arial';
+    ctx.textAlign = 'center';
+    for (let i = 0; i <= 5; i++) {
+        const x = padding + (i / 5) * (width - 2 * padding);
+        const time = (i * duration / 5).toFixed(2);
+        ctx.fillText(time, x, height - 10);
+    }
+
+    // Подписи оси Y (амплитуда)
+    ctx.save();
+    ctx.translate(10, height / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Амплитуда', 0, 0);
+    ctx.restore();
+
+    // Отрисовка сигнала
+    ctx.beginPath();
+    samples.forEach((sample, index) => {
+        const x = padding + (index / samples.length) * (width - 2 * padding);
+        const y = height - padding - ((sample + 1) / 2) * (height - 2 * padding);
+        index === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#4a90e2';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+    
+    log(message, type = 'info') {
+        const entry = document.createElement('div');
+        entry.className = `alert alert-${type} mb-2 p-2`;
+        entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+        this.eventLog.prepend(entry);
+    }
+    
+    updateConnectionStatus(type, message) {
+        this.connectionStatus.className = `alert alert-${type}`;
+        this.connectionStatus.textContent = `Соединение: ${message}`;
+    }
+    
+    updateRecordingStatus(type, message) {
+        this.recordingStatus.className = `alert alert-${type}`;
+        this.recordingStatus.textContent = `Запись: ${message}`;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    try {
+        new AudioRecorderApp();
+    } catch (error) {
+        console.error('Ошибка инициализации:', error);
+        document.getElementById('eventLog').innerHTML = `
+            <div class="alert alert-danger">
+                Ошибка инициализации: ${error.message}
+            </div>
+        `;
+    }
+});
+</script>
+
+<style>
+#waveform {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+}
+
+#eventLog {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#eventLog .alert {
+    padding: 0.5rem 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+}
+
+.audio-experiment .card-header {
+    background: linear-gradient(45deg, #1a2980, #26d0ce);
+    color: white;
+}
+</style>
 {% endblock %}
