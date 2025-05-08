@@ -255,7 +255,7 @@ class Experiments(models.Model):
     class Meta:
         verbose_name = "Эксперимент"
         verbose_name_plural = "Эксперименты"
-        ordering = ['-date']
+        ordering = ['-created_at']  # This is the correct field name
 
     def __str__(self) -> str:
         return f"Эксперимент #{self.id} ({self.user.full_name})"

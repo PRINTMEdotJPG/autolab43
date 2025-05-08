@@ -49,7 +49,6 @@ function setupUI(app) {
 
     function prepareNextStep(step) {
         console.log("Вызов prepareNextStep, step:", step);
-    console.log("Элемент audioExperiment:", elements.audioExperiment);
         safeDisplay(elements.experimentSetup, 'none');
         safeDisplay(elements.audioExperiment, 'block');
         safeDisplay(elements.studentResultsForm, 'none');
@@ -255,9 +254,3 @@ function setupUI(app) {
         elements
     };
 }
-
-// Временно добавить в конец обработчика формы
-setTimeout(() => {
-    app.ui.prepareNextStep(1);
-    console.log("Принудительный переход к записи (тест)");
-}, 1000);

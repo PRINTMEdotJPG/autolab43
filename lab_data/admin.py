@@ -107,10 +107,10 @@ class CustomUserAdmin(UserAdmin):
 
 @admin.register(Experiments)
 class ExperimentsAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'date', 'temperature', 'tube_length')
-    list_filter = ('user', 'date')
+    list_display = ('id', 'user', 'created_at', 'temperature', 'tube_length')  # Changed 'date' to 'created_at'
+    list_filter = ('user', 'created_at')  # Changed 'date' to 'created_at'
     search_fields = ('user__email', 'user__full_name')
-    date_hierarchy = 'date'
+    date_hierarchy = 'created_at'  # Changed 'date' to 'created_at'
     inlines = [EquipmentDataInline, ResultsInline, ProtocolsInline, CalculationsInline]
 
 @admin.register(EquipmentData)
