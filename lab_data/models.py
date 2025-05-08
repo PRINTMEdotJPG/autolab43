@@ -236,12 +236,21 @@ class Experiments(models.Model):
         related_name='experiments',
         verbose_name="Пользователь"
     )
-    date = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name="Дата эксперимента"
-    )
+    step = models.IntegerField(default=1)  # Добавить
+
     temperature = models.FloatField(verbose_name="Температура (°C)")
     tube_length = models.FloatField(verbose_name="Длина трубы (м)")
+
+    frequency = models.FloatField()  # Заменить frequencies
+
+    student_speed = models.FloatField(null=True)  # Добавить
+    student_gamma = models.FloatField(null=True)  # Добавить
+    
+    
+    system_gamma = models.FloatField(null=True)
+    error_percent = models.FloatField(null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)  # Заменить date
 
     class Meta:
         verbose_name = "Эксперимент"

@@ -1,377 +1,300 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Акустический эксперимент</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        /* Основные стили */
+        body {
+            padding-top: 20px;
+            padding-bottom: 20px;
+        }
+        
+        /* Стили для карточек */
+        .experiment-card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .experiment-card .card-header {
+            font-weight: 600;
+        }
+        
+        /* Стили для журнала событий */
+        #eventLog {
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        #eventLog .alert {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        
+        /* Стили для статусов */
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .status-active {
+            background-color: #28a745;
+        }
+        
+        .status-inactive {
+            background-color: #6c757d;
+        }
+        
+        /* Стили для графиков */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+        }
+        
+        /* Анимация кнопок */
+        .btn {
+            transition: all 0.3s ease;
+        }
+        
+        /* Адаптивные стили */
+        @media (max-width: 768px) {
+            .experiment-info {
+                display: block;
+            }
+            
+            .experiment-info span {
+                display: block;
+                margin-bottom: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
 <div class="container">
     {% if user.role == 'student' %}
-        <!-- Секция для студентов -->
-        <h1>Добро пожаловать, {{ full_name }}!</h1>
-        
-        <!-- Основной интерфейс записи -->
-        <div class="audio-experiment card mb-4">
-            <div class="card-header bg-primary text-white">
-                <h2 class="mb-0">🔊 Акустический эксперимент</h2>
-            </div>
-            <div class="card-body">
-                <button id="recordBtn" class="btn btn-success btn-lg">
-                    <i class="bi bi-mic"></i> Начать запись
-                </button>
-                
-                <div id="statusPanel" class="mt-3">
-                    <div class="alert alert-info" id="connectionStatus">
-                        Соединение: Не подключено
+        <!-- Основной интерфейс эксперимента -->
+        <div class="row">
+            <div class="col-lg-8">
+                <!-- Карточка управления экспериментом -->
+                <div class="card experiment-card">
+                    <div class="card-header bg-primary text-white">
+                        <i class="bi bi-speedometer2"></i> Управление экспериментом
                     </div>
-                    <div class="alert alert-secondary" id="recordingStatus">
-                        Запись: Не активна
-                    </div>
-                </div>
-                
-                <div id="resultsPanel" class="mt-4" style="display:none;">
-                    <h4>Результаты анализа интерференции</h4>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div id="minimaList"></div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="alert alert-info">
-                                <strong>Последний минимум:</strong>
-                                <div id="lastMinimaInfo"></div>
+                    <div class="card-body">
+                        <button id="startExperimentBtn" class="btn btn-primary btn-lg mb-3">
+                            <i class="bi bi-play-circle"></i> Запустить эксперимент
+                        </button>
+                        
+                        <!-- Блок статусов -->
+                        <div class="d-flex gap-3 mb-3">
+                            <div class="alert alert-info mb-0 flex-grow-1">
+                                <span id="connectionStatus">
+                                    <span class="status-indicator status-inactive"></span>
+                                    WebSocket: Не подключен
+                                </span>
+                            </div>
+                            <div class="alert alert-secondary mb-0 flex-grow-1">
+                                <span id="recordingStatus">
+                                    <span class="status-indicator status-inactive"></span>
+                                    Запись: Не активна
+                                </span>
                             </div>
                         </div>
                     </div>
-                    <div class="mt-3">
-                        <h5>График сигнала</h5>
-                        <canvas id="waveform" width="800" height="300"></canvas>
+                </div>
+                
+                <!-- Форма ввода параметров -->
+                <div id="experimentSetup" class="card experiment-card" style="display: none;">
+                    <div class="card-header bg-info text-white">
+                        <i class="bi bi-gear"></i> Параметры эксперимента 
+                        <span class="badge bg-light text-dark float-end">Шаг <span id="currentStepDisplay">1</span>/3</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="paramsForm">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label for="temperature" class="form-label">Температура воздуха (°C)</label>
+                                    <input type="number" id="temperature" class="form-control" 
+                                           min="10" max="40" step="0.1" required>
+                                    <div class="invalid-feedback" id="tempError">
+                                        Введите значение от 10 до 40
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="frequency" class="form-label">Частота генератора (Гц)</label>
+                                    <input type="number" id="frequency" class="form-control" 
+                                           min="1000" max="6000" step="100" required>
+                                    <div class="invalid-feedback" id="freqError">
+                                        Введите значение от 1000 до 6000
+                                    </div>
+                                    <small class="form-text text-muted">
+                                        Допустимый диапазон: 1000-6000 Гц
+                                    </small>
+                                </div>
+                            </div>
+                            <button type="submit" id="confirmParamsBtn" class="btn btn-success mt-3">
+                                <i class="bi bi-check-circle"></i> Подтвердить параметры
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                
+                <!-- Блок записи звука -->
+                <div id="audioExperiment" class="card experiment-card" style="display: none;">
+                    <div class="card-header bg-primary text-white">
+                        <i class="bi bi-mic"></i> Акустический эксперимент
+                        <span class="badge bg-light text-dark float-end" id="experimentStep">Шаг 1/3</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="experiment-info mb-3">
+                            <span class="badge bg-secondary" id="currentFrequency">
+                                <i class="bi bi-graph-up"></i> Частота: - Гц
+                            </span>
+                            <span class="badge bg-secondary" id="currentTemperature">
+                                <i class="bi bi-thermometer-half"></i> Температура: -°C
+                            </span>
+                        </div>
+                        
+                        <button id="recordBtn" class="btn btn-success btn-lg">
+                            <i class="bi bi-mic"></i> Начать запись
+                        </button>
+                        
+                        <div class="progress mt-3">
+                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                role="progressbar" style="width: 0%"></div>
+                        </div>
+                        
+                        <div id="stepCharts" class="mt-4"></div>
+                    </div>
+                </div>
+                
+                <!-- Форма ввода результатов -->
+                <div id="studentResultsForm" class="card experiment-card" style="display: none;">
+                    <div class="card-header bg-warning text-dark">
+                        <i class="bi bi-pencil-square"></i> Введите ваши расчеты
+                    </div>
+                    <div class="card-body">
+                        <form id="resultsForm">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label for="speed" class="form-label">Скорость звука (м/с)</label>
+                                    <input type="number" id="speed" class="form-control" step="0.1" required>
+                                    <div class="invalid-feedback" id="speedError">
+                                        Введите корректное значение
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="gamma" class="form-label">Отношение теплоемкостей γ</label>
+                                    <input type="number" id="gamma" class="form-control" step="0.01" required>
+                                    <div class="invalid-feedback" id="gammaError">
+                                        Введите корректное значение
+                                    </div>
+                                    <small class="form-text text-muted">
+                                        Эталонное значение: ~1.4
+                                    </small>
+                                </div>
+                            </div>
+                            
+                            <div id="chartsContainer" class="mt-4">
+                                <div class="chart-container">
+                                    <canvas id="finalChart"></canvas>
+                                </div>
+                            </div>
+                            
+                            <button type="submit" id="submitResultsBtn" class="btn btn-primary mt-3">
+                                <i class="bi bi-send-check"></i> Отправить результаты
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                
+                <!-- Блок результатов проверки -->
+                <div id="validationResult" class="card experiment-card" style="display: none;">
+                    <div class="card-header bg-success text-white">
+                        <i class="bi bi-check-circle"></i> Результаты проверки
+                    </div>
+                    <div class="card-body text-center">
+                        <div id="validationContent"></div>
+                        <button id="restartExperimentBtn" class="btn btn-outline-primary mt-3">
+                            <i class="bi bi-arrow-repeat"></i> Начать заново
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Журнал событий -->
+            <div class="col-lg-4">
+                <div class="card experiment-card h-100">
+                    <div class="card-header">
+                        <i class="bi bi-journal-text"></i> Журнал событий
+                    </div>
+                    <div class="card-body">
+                        <div id="eventLog"></div>
                     </div>
                 </div>
             </div>
         </div>
-
-        <!-- Журнал событий -->
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Журнал событий</h5>
-            </div>
-            <div class="card-body">
-                <div id="eventLog" style="max-height: 300px; overflow-y: auto;"></div>
-            </div>
+    {% else %}
+        <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle"></i> Доступ к эксперименту разрешен только студентам.
         </div>
     {% endif %}
 </div>
 
+<!-- Подключаем JavaScript файлы -->
+<script src="{% static 'js/logger.js' %}"></script>
+    <script src="{% static 'js/websocket.js' %}"></script>
+    <script src="{% static 'js/validation.js' %}"></script>
+    <script src="{% static 'js/recording.js' %}"></script>
+    <script src="{% static 'js/ui.js' %}"></script>
+    <script src="{% static 'js/core.js' %}"></script>
+    <script src="{% static 'js/charts.js' %}"></script>
+    <script src="{% static 'js/main.js' %}"></script>
+
+<!-- Инициализация приложения -->
 <script>
-class AudioRecorderApp {
-    constructor() {
-        this.mediaRecorder = null;
-        this.audioChunks = [];
-        this.socket = null;
-        this.isRecording = false;
-        this.sampleRate = null;
-        this.duration = null;
-        
-        // DOM элементы
-        this.recordBtn = document.getElementById('recordBtn');
-        this.connectionStatus = document.getElementById('connectionStatus');
-        this.recordingStatus = document.getElementById('recordingStatus');
-        this.eventLog = document.getElementById('eventLog');
-        this.resultsPanel = document.getElementById('resultsPanel');
-        this.minimaList = document.getElementById('minimaList');
-        this.lastMinimaInfo = document.getElementById('lastMinimaInfo');
-        this.waveformCanvas = document.getElementById('waveform');
-        
-        this.initWebSocket();
-        this.setupEventListeners();
-        this.log('Система инициализирована', 'info');
-    }
-    
-    initWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.socket = new WebSocket(`${protocol}//${window.location.host}/ws/audio/`);
-        
-        this.socket.onopen = () => {
-            this.updateConnectionStatus('success', 'Подключено');
-            this.recordBtn.disabled = false;
-            this.log('WebSocket соединение установлено', 'success');
-        };
-        
-        this.socket.onerror = (error) => {
-            this.updateConnectionStatus('danger', 'Ошибка подключения');
-            this.log(`Ошибка WebSocket: ${error.message || 'Неизвестная ошибка'}`, 'error');
-        };
-        
-        this.socket.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'analysis_result') {
-                    this.showResults(data);
-                } else if (data.type === 'error') {
-                    this.log(`Ошибка сервера: ${data.message}`, 'error');
-                }
-            } catch (e) {
-                this.log(`Ошибка обработки данных: ${e}`, 'error');
-            }
-        };
-    }
-    
-    setupEventListeners() {
-        this.recordBtn.addEventListener('click', () => {
-            if (this.isRecording) {
-                this.stopRecording();
-            } else {
-                this.startRecording();
-            }
-        });
-    }
-    
-    async startRecording() {
-        try {
-            this.log('Запрос доступа к микрофону...', 'info');
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            this.audioChunks = [];
-            
-            this.mediaRecorder.ondataavailable = (event) => {
-                this.audioChunks.push(event.data);
-            };
-            
-            this.mediaRecorder.onstop = () => {
-                this.sendAudioToServer();
-                this.updateRecordingStatus('secondary', 'Запись завершена');
-            };
-            
-            this.mediaRecorder.start(100);
-            this.isRecording = true;
-            this.recordBtn.innerHTML = '<i class="bi bi-stop-circle"></i> Остановить запись';
-            this.recordBtn.classList.replace('btn-success', 'btn-danger');
-            this.updateRecordingStatus('info', 'Идет запись...');
-            this.log('Запись начата', 'success');
-            
-        } catch (error) {
-            this.log(`Ошибка записи: ${error.message}`, 'error');
-            this.updateRecordingStatus('danger', 'Ошибка записи');
-        }
-    }
-    
-    stopRecording() {
-        if (this.mediaRecorder && this.isRecording) {
-            this.mediaRecorder.stop();
-            this.isRecording = false;
-            this.recordBtn.innerHTML = '<i class="bi bi-mic"></i> Начать запись';
-            this.recordBtn.classList.replace('btn-danger', 'btn-success');
-            this.log('Запись остановлена', 'info');
-        }
-    }
-    
-    sendAudioToServer() {
-        if (this.audioChunks.length === 0) {
-            this.log('Нет данных для отправки', 'warning');
-            return;
-        }
-        
-        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-        const reader = new FileReader();
-        
-        reader.onload = () => {
-            const base64data = reader.result.split(',')[1];
-            this.socket.send(JSON.stringify({
-                type: 'audio_data',
-                data: base64data,
-                format: 'webm'
-            }));
-            this.log('Аудио данные отправлены на сервер', 'success');
-        };
-        
-        reader.readAsDataURL(audioBlob);
-    }
-    
-    showResults(data) {
-        if (!data?.minima || !data?.waveform || !data?.positions) {
-            this.log("Ошибка: неполные данные от сервера", "error");
-            return;
-        }
-
-        this.sampleRate = data.sample_rate;
-        this.duration = data.duration;
-        
-        this.resultsPanel.style.display = 'block';
-        
-        // Отображение списка минимумов
-        this.minimaList.innerHTML = data.minima.map((m, i) => `
-            <div class="alert ${i === data.minima.length - 1 ? 'alert-success' : 'alert-secondary'} mb-2 p-2">
-                <strong>Минимум #${i+1}</strong><br>
-                Позиция: ${m.position.toFixed(4)} м<br>
-                Время: ${m.time.toFixed(2)} с<br>
-                Амплитуда: ${m.amplitude.toFixed(4)}
+    // Показываем статус загрузки
+    document.addEventListener('DOMContentLoaded', function() {
+        const loadingIndicator = document.createElement('div');
+        loadingIndicator.className = 'alert alert-info text-center';
+        loadingIndicator.innerHTML = `
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Загрузка...</span>
             </div>
-        `).join('');
-        
-        // Информация о последнем минимуме
-        if (data.minima.length > 0) {
-            const last = data.minima[data.minima.length - 1];
-            this.lastMinimaInfo.innerHTML = `
-                Позиция: <strong>${last.position.toFixed(4)} м</strong><br>
-                Время: <strong>${last.time.toFixed(2)} с</strong><br>
-                Амплитуда: <strong>${last.amplitude.toFixed(4)}</strong>
-            `;
-        }
-        
-        // Отрисовка графика
-        this.drawWaveform(data.waveform, data.positions, data.minima);
-        this.log(`Получены результаты (${data.minima.length} минимумов)`, "success");
-    }
-    
-    drawWaveform(samples, positions, minima) {
-        const canvas = this.waveformCanvas;
-        const ctx = canvas.getContext('2d');
-        const width = canvas.width;
-        const height = canvas.height;
-        const padding = 40;
-        
-        // Очистка холста
-        ctx.clearRect(0, 0, width, height);
-        
-        // Определение масштабов
-        const maxPos = Math.max(...positions);
-        const maxAmp = Math.max(...samples.map(Math.abs));
-        
-        // Оси координат
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
-        
-        // Ось X (позиция)
-        ctx.beginPath();
-        ctx.moveTo(padding, height - padding);
-        ctx.lineTo(width - padding, height - padding);
-        ctx.stroke();
-        
-        // Ось Y (амплитуда)
-        ctx.beginPath();
-        ctx.moveTo(padding, padding);
-        ctx.lineTo(padding, height - padding);
-        ctx.stroke();
-        
-        // Подписи оси X
-        ctx.fillStyle = '#000';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
-        for (let i = 0; i <= 5; i++) {
-            const x = padding + (i / 5) * (width - 2 * padding);
-            const pos = (i * maxPos / 5).toFixed(2);
-            ctx.fillText(pos, x, height - 20);
-        }
-        ctx.fillText('Позиция трубы (м)', width / 2, height - 5);
-        
-        // Подписи оси Y
-        ctx.save();
-        ctx.translate(15, height / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.textAlign = 'center';
-        ctx.fillText('Амплитуда сигнала', 0, 0);
-        ctx.restore();
-        
-        // Отрисовка сигнала (только положительные значения)
-        ctx.beginPath();
-        samples.forEach((sample, i) => {
-            const x = padding + (positions[i] / maxPos) * (width - 2 * padding);
-            const y = height - padding - (Math.abs(sample) / maxAmp * (height - 2 * padding));
-            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        });
-        ctx.strokeStyle = '#4a90e2';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        
-        // Отрисовка минимумов
-        minima.forEach(m => {
-            const x = padding + (m.position / maxPos) * (width - 2 * padding);
-            const y = height - padding - (Math.abs(m.amplitude) / maxAmp * (height - 2 * padding));
-            
-            // Маркер минимума
-            ctx.fillStyle = '#dc3545';
-            ctx.beginPath();
-            ctx.arc(x, y, 5, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Линия к подписи
-            ctx.strokeStyle = 'rgba(220, 53, 69, 0.5)';
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x, height - padding + 15);
-            ctx.stroke();
-            
-            // Подпись позиции
-            ctx.fillStyle = '#dc3545';
-            ctx.fillText(m.position.toFixed(3), x, height - padding + 30);
-        });
-    }
-    
-    log(message, type = 'info') {
-        const entry = document.createElement('div');
-        entry.className = `alert alert-${type} mb-2 p-2`;
-        entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
-        this.eventLog.prepend(entry);
-    }
-    
-    updateConnectionStatus(type, message) {
-        this.connectionStatus.className = `alert alert-${type}`;
-        this.connectionStatus.textContent = `Соединение: ${message}`;
-    }
-    
-    updateRecordingStatus(type, message) {
-        this.recordingStatus.className = `alert alert-${type}`;
-        this.recordingStatus.textContent = `Запись: ${message}`;
-    }
-}
-
-// Инициализация приложения после загрузки DOM
-document.addEventListener('DOMContentLoaded', () => {
-    try {
-        new AudioRecorderApp();
-    } catch (error) {
-        console.error('Ошибка инициализации:', error);
-        document.getElementById('eventLog').innerHTML = `
-            <div class="alert alert-danger">
-                Ошибка инициализации: ${error.message}
-            </div>
+            <p class="mt-2 mb-0">Инициализация приложения...</p>
         `;
-    }
-});
+        
+        const eventLog = document.getElementById('eventLog');
+        if (eventLog) {
+            eventLog.appendChild(loadingIndicator);
+        }
+    });
 </script>
-
-<style>
-#waveform {
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    margin-bottom: 20px;
-}
-
-#eventLog {
-    max-height: 300px;
-    overflow-y: auto;
-}
-
-#eventLog .alert {
-    padding: 0.5rem 1rem;
-    margin-bottom: 0.5rem;
-    border-radius: 4px;
-}
-
-.audio-experiment .card-header {
-    background: linear-gradient(45deg, #1a2980, #26d0ce);
-    color: white;
-}
-
-#minimaList .alert {
-    transition: all 0.3s ease;
-}
-
-#minimaList .alert:hover {
-    transform: translateX(5px);
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-}
-
-#lastMinimaInfo {
-    font-size: 1.1rem;
-}
-</style>
+</body>
+</html>
 {% endblock %}

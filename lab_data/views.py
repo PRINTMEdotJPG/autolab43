@@ -449,3 +449,21 @@ class DownloadManualView(View):
         
         logger.error(f"Manual not found at {file_path}")
         raise Http404("Методичка не найдена")
+    
+def submit_results(request):
+    data = json.loads(request.body)
+    experiment = Experiments.objects.get(id=data['experiment_id'])
+    
+    # Расчет эталонного значения
+    system_gamma = experiment.system_gamma
+    
+    # Сравнение
+    error = abs((data['gamma'] - system_gamma) / system_gamma) * 100
+    experiment.error_percent = error
+    experiment.save()
+    
+    return JsonResponse({
+        'status': 'success' if error <= 5 else 'fail',
+        'system_gamma': system_gamma,
+        'error': error
+    })
