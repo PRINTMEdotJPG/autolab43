@@ -230,12 +230,20 @@ class User(AbstractBaseUser, PermissionsMixin):
 class Experiments(models.Model):
     """Модель для хранения данных о проведенных экспериментах."""
 
+    STATUS_CHOICES = [
+        ('started', 'Начат'),
+        ('in_progress', 'В процессе'),
+        ('completed', 'Завершен'),
+        ('failed', 'Ошибка')
+    ]
+    
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
         related_name='experiments',
         verbose_name="Пользователь"
     )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='started')
     step = models.IntegerField(default=1)  # Добавить
 
     temperature = models.FloatField(verbose_name="Температура (°C)")
@@ -296,37 +304,14 @@ class Results(models.Model):
         ('pending', 'Ожидает проверки'),
     ]
 
-    experiment = models.OneToOneField(
-        Experiments,
-        on_delete=models.CASCADE,
-        primary_key=True,
-        verbose_name="Эксперимент"
-    )
-    gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ")
-    student_gamma = models.FloatField(
-        verbose_name="Студенческое γ",
-        null=True,
-        blank=True
-    )
-    gamma_reference = models.FloatField(verbose_name="Эталонное γ")
-    error_percent = models.FloatField(verbose_name="Отклонение (%)")
-    student_error = models.FloatField(
-        verbose_name="Студенческое отклонение",
-        null=True,
-        blank=True
-    )
-    status = models.CharField(
-        max_length=10,
-        choices=STATUS_CHOICES,
-        default='pending',
-        verbose_name="Статус"
-    )
-    visualization_data = models.JSONField(
-        verbose_name="Данные для визуализации",
-        null=True,
-        blank=True
-    )
-    detailed_results = models.JSONField(verbose_name="Детальные результаты")
+    experiment = models.OneToOneField(Experiments, on_delete=models.CASCADE, primary_key=True)
+    gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ", default=0)
+    gamma_reference = models.FloatField(verbose_name="Эталонное γ", default=1.4)
+    student_gamma = models.FloatField(verbose_name="Студенческое γ", null=True, blank=True)
+    error_percent = models.FloatField(verbose_name="Отклонение (%)", null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    visualization_data = models.JSONField(default=dict)
+    detailed_results = models.JSONField(default=list)
 
     class Meta:
         verbose_name = "Результат"

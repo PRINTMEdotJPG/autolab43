@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial; }
+        .header { text-align: center; border-bottom: 2px solid #333; }
+        .section { margin: 20px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        td, th { border: 1px solid #ddd; padding: 8px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Протокол эксперимента #{{ experiment.id }}</h1>
+        <p>Студент: {{ student.full_name }}</p>
+        <p>Группа: {{ student.group_name }}</p>
+    </div>
+
+    <div class="section">
+        <h2>Параметры эксперимента</h2>
+        <p>Температура: {{ experiment.temperature }}°C</p>
+        <p>Частота: {{ experiment.frequency }} Гц</p>
+    </div>
+
+    <div class="section">
+        <h2>Результаты</h2>
+        <table>
+            <tr><th>Параметр</th><th>Значение</th></tr>
+            <tr><td>Скорость звука</td><td>{{ experiment.student_speed|default:"-" }} м/с</td></tr>
+            <tr><td>Коэффициент γ</td><td>{{ experiment.student_gamma|default:"-" }}</td></tr>
+        </table>
+    </div>
+</body>
+</html>
+{% endblock %}

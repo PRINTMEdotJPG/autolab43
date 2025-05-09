@@ -49,7 +49,6 @@ function setupUI(app) {
 
     function prepareNextStep(step) {
         console.log("Вызов prepareNextStep, step:", step);
-    console.log("Элемент audioExperiment:", elements.audioExperiment);
         safeDisplay(elements.experimentSetup, 'none');
         safeDisplay(elements.audioExperiment, 'block');
         safeDisplay(elements.studentResultsForm, 'none');
@@ -165,7 +164,13 @@ function setupUI(app) {
         if (elements.startBtn) {
             elements.startBtn.addEventListener('click', function() {
                 if (app.ws && app.ws.isConnected()) {
-                    app.startExperiment();
+                    try {
+                        app.logger.info('[UI] Нажата кнопка старта эксперимента');
+                        app.startExperiment();
+                    } catch (error) {
+                        app.logger.error('[UI] Ошибка в обработчике кнопки:', error);
+                        app.showNotification('Не удалось начать эксперимент', 'error');
+                    }
                 } else {
                     app.logger.log('Пожалуйста, дождитесь подключения WebSocket', 'warning');
                 }
@@ -255,9 +260,3 @@ function setupUI(app) {
         elements
     };
 }
-
-// Временно добавить в конец обработчика формы
-setTimeout(() => {
-    app.ui.prepareNextStep(1);
-    console.log("Принудительный переход к записи (тест)");
-}, 1000);

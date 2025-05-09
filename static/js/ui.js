@@ -164,7 +164,13 @@ function setupUI(app) {
         if (elements.startBtn) {
             elements.startBtn.addEventListener('click', function() {
                 if (app.ws && app.ws.isConnected()) {
-                    app.startExperiment();
+                    try {
+                        app.logger.info('[UI] Нажата кнопка старта эксперимента');
+                        app.startExperiment();
+                    } catch (error) {
+                        app.logger.error('[UI] Ошибка в обработчике кнопки:', error);
+                        app.showNotification('Не удалось начать эксперимент', 'error');
+                    }
                 } else {
                     app.logger.log('Пожалуйста, дождитесь подключения WebSocket', 'warning');
                 }

@@ -14,5 +14,9 @@ urlpatterns = [
          path('experiment/start/', views.start_experiment, name='start_experiment'),
     path('experiment/results/<int:experiment_id>/', views.experiment_results, name='experiment_results'),
     path('retry_experiment/<int:experiment_id>', views.retry_experiment, name='retry_experiment'),
+    path('download-protocol/<int:experiment_id>/', views.download_protocol, name='download_protocol'),
+
+    path('api/start-experiment/', views.start_experiment_api, name='start_experiment_api'),
+    path('api/save-experiment/<int:experiment_id>/', views.save_experiment_results, name='save_results'),
 
 ]

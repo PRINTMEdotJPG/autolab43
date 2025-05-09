@@ -18,6 +18,7 @@ import logging
 import os
 from config import config
 
+
 from .models import User, Experiments, EquipmentData, Results
 from .imitate_module.sensors_simulator import ExperimentSimulator
 from .forms import StudentLoginForm, TeacherLoginForm, StudentResultForm
@@ -26,6 +27,18 @@ from .generate_graphs import (
     generate_interference_graph,
     generate_signal_time_graph
 )
+from django.template.loader import render_to_string
+
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+
+from io import BytesIO
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from django.conf import settings
+
+
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -467,3 +480,159 @@ def submit_results(request):
         'system_gamma': system_gamma,
         'error': error
     })
+
+@login_required
+@require_http_methods(["POST"])
+def save_experiment_results(request, experiment_id):
+    try:
+        experiment = Experiments.objects.get(id=experiment_id, user=request.user)
+        data = json.loads(request.body)
+        
+        # Проверка обязательных полей
+        final_results = data.get('final_results', {})
+        if not all(k in final_results for k in ['system_speed', 'system_gamma', 'student_speed', 'student_gamma']):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required fields in final_results'
+            }, status=400)
+
+        # Обновляем эксперимент
+        experiment.student_speed = float(final_results['student_speed'])
+        experiment.student_gamma = float(final_results['student_gamma'])
+        experiment.system_gamma = float(final_results['system_gamma'])
+        experiment.error_percent = float(final_results.get('error_percent', 0))
+        experiment.status = 'completed'
+        experiment.save()
+
+        # Обновляем или создаем результаты
+        Results.objects.update_or_create(
+            experiment=experiment,
+            defaults={
+                'gamma_calculated': float(final_results['system_gamma']),
+                'gamma_reference': 1.4,
+                'student_gamma': float(final_results['student_gamma']),
+                'error_percent': float(final_results.get('error_percent', 0)),
+                'status': 'completed',
+                'detailed_results': data.get('steps', []),
+                'visualization_data': data.get('charts_data', {})
+            }
+        )
+        
+        return JsonResponse({'status': 'success'})
+    
+    except Exception as e:
+        logger.error(f"Error saving results: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+    
+def download_protocol(request, experiment_id):
+    experiment = get_object_or_404(Experiments, id=experiment_id)
+    student = experiment.user
+    
+    # Проверка прав доступа
+    if not (request.user.is_staff or request.user == student):
+        return HttpResponseForbidden()
+    
+    # Генерация PDF
+    pdf_content = generate_protocol_pdf(experiment, student)
+    
+    # Возвращаем PDF как ответ
+    response = HttpResponse(pdf_content, content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="protocol_{experiment_id}.pdf"'
+    return response
+
+def generate_protocol_pdf(experiment, student):
+    """Генерация PDF протокола с использованием ReportLab"""
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    
+    # Регистрируем шрифт с поддержкой кириллицы
+    font_path = os.path.join(settings.BASE_DIR, 'static', 'fonts', 'DejaVuSans-Bold.ttf')
+    pdfmetrics.registerFont(TTFont('DejaVu', font_path))
+    
+    # Настройки документа
+    width, height = A4
+    margin = 2 * cm
+    line_height = 0.5 * cm
+    
+    # 1. Заголовок документа
+    p.setFont("DejaVu", 16)
+    p.drawString(margin, height - margin, f"Протокол эксперимента #{experiment.id}")
+    
+    # 2. Информация о студенте
+    p.setFont("DejaVu", 12)
+    y_position = height - margin - line_height * 2
+    p.drawString(margin, y_position, f"Студент: {student.full_name}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Группа: {student.group_name}")
+    
+    # 3. Параметры эксперимента
+    y_position -= line_height * 1.5
+    p.setFont("DejaVu", 14)
+    p.drawString(margin, y_position, "Параметры эксперимента:")
+    
+    p.setFont("DejaVu", 12)
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Температура: {experiment.temperature} °C")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Частота: {experiment.frequency} Гц")
+    
+    # 4. Результаты эксперимента
+    y_position -= line_height * 1.5
+    p.setFont("DejaVu", 14)
+    p.drawString(margin, y_position, "Результаты:")
+    
+    # Таблица результатов
+    results = [
+        ("Параметр", "Значение"),
+        ("Скорость звука", f"{experiment.student_speed or '-'} м/с"),
+        ("Коэффициент γ", f"{experiment.student_gamma or '-'}"),
+        ("Ошибка", f"{experiment.error_percent or '-'}%")
+    ]
+    
+    p.setFont("DejaVu", 12)
+    for row in results:
+        y_position -= line_height
+        p.drawString(margin, y_position, row[0])
+        p.drawString(margin + 6*cm, y_position, row[1])
+    
+    # 5. Подпись и дата
+    y_position -= line_height * 2
+    p.line(margin, y_position, width - margin, y_position)
+    y_position -= line_height
+    p.drawString(margin, y_position, "Преподаватель: ___________________")
+    y_position -= line_height
+    p.drawString(margin, y_position, "Дата: ___________________")
+    
+    # Сохраняем PDF
+    p.showPage()
+    p.save()
+    
+    # Получаем содержимое PDF
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
+
+@login_required
+@require_http_methods(["POST"])
+def start_experiment_api(request):
+    """API для создания нового эксперимента и возврата его ID"""
+    try:
+        experiment = Experiments.objects.create(
+            user=request.user,
+            temperature=0,  # Временные значения
+            frequency=0,
+            tube_length=0.5,
+            status='started'
+        )
+        return JsonResponse({
+            'status': 'success',
+            'experiment_id': experiment.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)

@@ -1,0 +1,2 @@
+brew install cairo pango gdk-pixbuf libffi
+brew install ffmpeg 

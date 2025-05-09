@@ -8,36 +8,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Акустический эксперимент</title>
-    
-    <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    
-    <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    
-    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
     <style>
-        /* Основные стили */
         body {
             padding-top: 20px;
             padding-bottom: 20px;
         }
-        
-        /* Стили для карточек */
         .experiment-card {
             margin-bottom: 20px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             border-radius: 8px;
             overflow: hidden;
         }
-        
         .experiment-card .card-header {
             font-weight: 600;
         }
-        
-        /* Стили для журнала событий */
         #eventLog {
             max-height: 300px;
             overflow-y: auto;
@@ -45,14 +32,11 @@
             background-color: #f8f9fa;
             border-radius: 5px;
         }
-        
         #eventLog .alert {
             padding: 8px 12px;
             margin-bottom: 8px;
             border-radius: 4px;
         }
-        
-        /* Стили для статусов */
         .status-indicator {
             display: inline-block;
             width: 12px;
@@ -60,33 +44,24 @@
             border-radius: 50%;
             margin-right: 5px;
         }
-        
         .status-active {
             background-color: #28a745;
         }
-        
         .status-inactive {
             background-color: #6c757d;
         }
-        
-        /* Стили для графиков */
         .chart-container {
             position: relative;
             height: 300px;
             margin-bottom: 20px;
         }
-        
-        /* Анимация кнопок */
         .btn {
             transition: all 0.3s ease;
         }
-        
-        /* Адаптивные стили */
         @media (max-width: 768px) {
             .experiment-info {
                 display: block;
             }
-            
             .experiment-info span {
                 display: block;
                 margin-bottom: 5px;
@@ -97,20 +72,21 @@
 <body>
 <div class="container">
     {% if user.role == 'student' %}
-        <!-- Основной интерфейс эксперимента -->
         <div class="row">
             <div class="col-lg-8">
-                <!-- Карточка управления экспериментом -->
                 <div class="card experiment-card">
                     <div class="card-header bg-primary text-white">
                         <i class="bi bi-speedometer2"></i> Управление экспериментом
                     </div>
                     <div class="card-body">
-                        <button id="startExperimentBtn" class="btn btn-primary btn-lg mb-3">
-                            <i class="bi bi-play-circle"></i> Запустить эксперимент
-                        </button>
-                        
-                        <!-- Блок статусов -->
+                        <div class="d-flex gap-2 mb-3">
+                            <button id="startExperimentBtn" class="btn btn-primary btn-lg flex-grow-1">
+                                <i class="bi bi-play-circle"></i> Запустить эксперимент
+                            </button>
+                            <a href="{% url 'download_manual' %}" target="_blank" class="btn btn-outline-primary btn-lg flex-grow-1">
+                                <i class="bi bi-book"></i> Посмотреть методичку
+                            </a>
+                        </div>
                         <div class="d-flex gap-3 mb-3">
                             <div class="alert alert-info mb-0 flex-grow-1">
                                 <span id="connectionStatus">
@@ -127,8 +103,6 @@
                         </div>
                     </div>
                 </div>
-                
-                <!-- Форма ввода параметров -->
                 <div id="experimentSetup" class="card experiment-card" style="display: none;">
                     <div class="card-header bg-info text-white">
                         <i class="bi bi-gear"></i> Параметры эксперимента 
@@ -163,8 +137,6 @@
                         </form>
                     </div>
                 </div>
-                
-                <!-- Блок записи звука -->
                 <div id="audioExperiment" class="card experiment-card" style="display: none;">
                     <div class="card-header bg-primary text-white">
                         <i class="bi bi-mic"></i> Акустический эксперимент
@@ -179,21 +151,16 @@
                                 <i class="bi bi-thermometer-half"></i> Температура: -°C
                             </span>
                         </div>
-                        
                         <button id="recordBtn" class="btn btn-success btn-lg">
                             <i class="bi bi-mic"></i> Начать запись
                         </button>
-                        
                         <div class="progress mt-3">
                             <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
                                 role="progressbar" style="width: 0%"></div>
                         </div>
-                        
                         <div id="stepCharts" class="mt-4"></div>
                     </div>
                 </div>
-                
-                <!-- Форма ввода результатов -->
                 <div id="studentResultsForm" class="card experiment-card" style="display: none;">
                     <div class="card-header bg-warning text-dark">
                         <i class="bi bi-pencil-square"></i> Введите ваши расчеты
@@ -219,35 +186,34 @@
                                     </small>
                                 </div>
                             </div>
-                            
                             <div id="chartsContainer" class="mt-4">
                                 <div class="chart-container">
                                     <canvas id="finalChart"></canvas>
                                 </div>
                             </div>
-                            
                             <button type="submit" id="submitResultsBtn" class="btn btn-primary mt-3">
                                 <i class="bi bi-send-check"></i> Отправить результаты
                             </button>
                         </form>
                     </div>
                 </div>
-                
-                <!-- Блок результатов проверки -->
                 <div id="validationResult" class="card experiment-card" style="display: none;">
                     <div class="card-header bg-success text-white">
                         <i class="bi bi-check-circle"></i> Результаты проверки
                     </div>
                     <div class="card-body text-center">
                         <div id="validationContent"></div>
-                        <button id="restartExperimentBtn" class="btn btn-outline-primary mt-3">
-                            <i class="bi bi-arrow-repeat"></i> Начать заново
-                        </button>
+                        <div class="d-flex gap-3 justify-content-center mt-4">
+                            <button id="saveResultsBtn" class="btn btn-success">
+                                <i class="bi bi-save"></i> Сохранить результаты
+                            </button>
+                            <button id="restartExperimentBtn" class="btn btn-outline-primary">
+                                <i class="bi bi-arrow-repeat"></i> Начать заново
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- Журнал событий -->
             <div class="col-lg-4">
                 <div class="card experiment-card h-100">
                     <div class="card-header">
@@ -260,25 +226,79 @@
             </div>
         </div>
     {% else %}
-        <div class="alert alert-warning">
-            <i class="bi bi-exclamation-triangle"></i> Доступ к эксперименту разрешен только студентам.
+        <div class="row">
+            <div class="col-12">
+                <h2 class="mb-4"><i class="bi bi-people-fill"></i> Список студентов</h2>
+                {% for group in groups_with_students %}
+                    <div class="card mb-4">
+                        <div class="card-header bg-primary text-white">
+                            <i class="bi bi-collection"></i> Группа: {{ group.name }}
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>ФИО студента</th>
+                                            <th>Статус</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for student in group.students %}
+                                            <tr>
+                                                <td>{{ student.full_name }}</td>
+                                                <td>
+                                                    {% if student.experiments.exists %}
+                                                        <span class="badge bg-success">
+                                                            <i class="bi bi-check-circle"></i> Эксперимент проведен
+                                                        </span>
+                                                    {% else %}
+                                                        <span class="badge bg-secondary">
+                                                            <i class="bi bi-hourglass"></i> Нет данных
+                                                        </span>
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    {% if student.experiments.exists %}
+                                                        <a href="{% url 'download_protocol' student.experiments.first.id %}" 
+                                                           class="btn btn-sm btn-primary"
+                                                           target="_blank">
+                                                            <i class="bi bi-file-pdf"></i> Скачать протокол
+                                                        </a>
+                                                    {% else %}
+                                                        <button class="btn btn-sm btn-secondary" disabled>
+                                                            <i class="bi bi-file-pdf"></i> Нет протокола
+                                                        </button>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                {% empty %}
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i> Нет студентов для отображения.
+                    </div>
+                {% endfor %}
+            </div>
         </div>
     {% endif %}
 </div>
 
-<!-- Подключаем JavaScript файлы -->
 <script src="{% static 'js/logger.js' %}"></script>
-    <script src="{% static 'js/websocket.js' %}"></script>
-    <script src="{% static 'js/validation.js' %}"></script>
-    <script src="{% static 'js/recording.js' %}"></script>
-    <script src="{% static 'js/ui.js' %}"></script>
-    <script src="{% static 'js/core.js' %}"></script>
-    <script src="{% static 'js/charts.js' %}"></script>
-    <script src="{% static 'js/main.js' %}"></script>
+<script src="{% static 'js/websocket.js' %}"></script>
+<script src="{% static 'js/validation.js' %}"></script>
+<script src="{% static 'js/recording.js' %}"></script>
+<script src="{% static 'js/ui.js' %}"></script>
+<script src="{% static 'js/core.js' %}"></script>
+<script src="{% static 'js/charts.js' %}"></script>
+<script src="{% static 'js/main.js' %}"></script>
 
-<!-- Инициализация приложения -->
 <script>
-    // Показываем статус загрузки
     document.addEventListener('DOMContentLoaded', function() {
         const loadingIndicator = document.createElement('div');
         loadingIndicator.className = 'alert alert-info text-center';
@@ -288,7 +308,6 @@
             </div>
             <p class="mt-2 mb-0">Инициализация приложения...</p>
         `;
-        
         const eventLog = document.getElementById('eventLog');
         if (eventLog) {
             eventLog.appendChild(loadingIndicator);
