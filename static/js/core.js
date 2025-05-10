@@ -10,6 +10,7 @@ function AudioRecorderApp() {
     this.currentStep = 0;
     this.maxSteps = 3;
     this.stepsData = [];
+    
     this.experimentStarted = false;
 
     try {
@@ -32,8 +33,20 @@ function AudioRecorderApp() {
         this.currentExperimentId = null;
 
         this.logger.info('[CORE] Приложение готово к работе');
+        this.arduino = window.initArduinoModule ? initArduinoModule(this) : null;
+
+        
     } catch (error) {
         this.logger.error('[CORE] Ошибка инициализации', error);
+        throw error;
+    }
+
+    try {
+        initArduinoModule(this);
+        this.logger.info('[CORE] Модуль Arduino инициализирован');
+    }
+    catch (error) {
+        this.logger.error('[CORE] Ошибка инициализации модуля Arduino', error);
         throw error;
     }
 
@@ -289,6 +302,47 @@ AudioRecorderApp.prototype.resetExperiment = function() {
     this.experimentStarted = false;
     this.ui.resetUI();
     this.logger.info('[CORE] Эксперимент сброшен');
+};
+
+AudioRecorderApp.prototype.initArduino = async function() {
+    try {
+        this.arduinoPort = await navigator.serial.requestPort();
+        await this.arduinoPort.open({ baudRate: 115200 });
+        this.logger.info('[CORE] Arduino подключен');
+        
+        this.arduinoReader = this.arduinoPort.readable.getReader();
+        this._readArduinoData();
+        
+    } catch (error) {
+        this.logger.error('[CORE] Ошибка подключения к Arduino', error);
+    }
+};
+
+AudioRecorderApp.prototype._readArduinoData = async function() {
+    while (true) {
+        const { value, done } = await this.arduinoReader.read();
+        if (done) break;
+        
+        try {
+            const data = JSON.parse(new TextDecoder().decode(value));
+            if (data.type === 'distance') {
+                this._handleDistanceData(data.value);
+            }
+        } catch (e) {
+            this.logger.warn('[CORE] Некорректные данные с Arduino');
+        }
+    }
+};
+
+AudioRecorderApp.prototype._handleDistanceData = function(distance) {
+    if (!this.experimentStarted) return;
+    
+    this.stepsData[this.currentStep-1].distance = distance;
+    this.ws.send(JSON.stringify({
+        type: "distance_update",
+        step: this.currentStep,
+        distance: distance
+    }));
 };
 
 // Экспорт класса

@@ -50,6 +50,9 @@
         .status-inactive {
             background-color: #6c757d;
         }
+        .status-error {
+            background-color: #dc3545;
+        }
         .chart-container {
             position: relative;
             height: 300px;
@@ -101,6 +104,20 @@
                                 </span>
                             </div>
                         </div>
+                        <!-- Блок состояния Arduino -->
+                        <div class="d-flex gap-3 mb-3">
+                            <div class="alert alert-warning mb-0 flex-grow-1">
+                                <span id="arduinoStatus">
+                                    <span class="status-indicator status-inactive"></span>
+                                    Arduino: Не подключена
+                                </span>
+                            </div>
+                            <div class="alert alert-success mb-0 flex-grow-1">
+                                <span id="distanceStatus">
+                                    <i class="bi bi-rulers"></i> Расстояние: <span id="distanceValue">—</span> см
+                                </span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div id="experimentSetup" class="card experiment-card" style="display: none;">
@@ -149,6 +166,9 @@
                             </span>
                             <span class="badge bg-secondary" id="currentTemperature">
                                 <i class="bi bi-thermometer-half"></i> Температура: -°C
+                            </span>
+                            <span class="badge bg-info" id="currentDistance">
+                                <i class="bi bi-rulers"></i> Расстояние: - см
                             </span>
                         </div>
                         <button id="recordBtn" class="btn btn-success btn-lg">
@@ -296,24 +316,8 @@
 <script src="{% static 'js/ui.js' %}"></script>
 <script src="{% static 'js/core.js' %}"></script>
 <script src="{% static 'js/charts.js' %}"></script>
+<script src="{% static 'js/arduino.js' %}"></script> <!-- Новый файл для работы с Arduino -->
 <script src="{% static 'js/main.js' %}"></script>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const loadingIndicator = document.createElement('div');
-        loadingIndicator.className = 'alert alert-info text-center';
-        loadingIndicator.innerHTML = `
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Загрузка...</span>
-            </div>
-            <p class="mt-2 mb-0">Инициализация приложения...</p>
-        `;
-        const eventLog = document.getElementById('eventLog');
-        if (eventLog) {
-            eventLog.appendChild(loadingIndicator);
-        }
-    });
-</script>
 </body>
 </html>
 {% endblock %}
