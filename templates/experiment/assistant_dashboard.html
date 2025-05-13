@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Панель лаборанта</h1>
+<table>
+    <thead>
+        <tr>
+            <th>Студент</th>
+            <th>Группа</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for student in students %}
+        <tr>
+            <td>{{ student.full_name }}</td>
+            <td>{{ student.group_name }}</td>
+            <td>
+                <button onclick="startExperiment({{ student.id }})">Запустить эксперимент</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<script>
+    function startExperiment(studentId) {
+        fetch('/assistant/start-experiment/', {
+            method: 'POST',
+            body: JSON.stringify({student_id: studentId}),
+            headers: {'X-CSRFToken': '{{ csrf_token }}'}
+        }).then(response => response.json())
+          .then(data => alert(`Эксперимент #${data.experiment_id} создан для ${data.student_name}`));
+    }
+</script>
+{% endblock %}

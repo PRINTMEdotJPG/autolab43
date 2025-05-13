@@ -1,75 +1,32 @@
-{% if result.status == 'pending' %}
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit" class="btn btn-primary">Отправить результат</button>
-  </form>
-{% else %}
-  <div class="results-box">
-    <h4>Программный результат: {{ result.gamma_calculated|floatformat:3 }}</h4>
-    <h4>Ваш результат: {{ result.student_gamma|floatformat:3 }}</h4>
-    <p>Отклонение от эталона: {{ result.student_error|floatformat:2 }}%</p>
-  </div>
-{% endif %}
-
-{% if needs_retry %}
-  <div class="alert alert-warning">
-    <form method="post" action="{% url 'retry_experiment' experiment.id %}">
-      {% csrf_token %}
-      <p>Результат неудовлетворителен! Хотите повторить эксперимент?</p>
-      <button type="submit" class="btn btn-warning">Повторить эксперимент</button>
-      <a href="?confirm=no" class="btn btn-secondary">Сохранить как есть</a>
-    </form>
-  </div>
-{% endif %}
-
+{% extends 'base.html' %}
 {% block content %}
-<{% if graphs %}
-<div class="graphs-container">
-    {% if graphs.signal_vs_time %}
-    <div class="graph-box">
-        <h4>График сигнала микрофона</h4>
-        <img src="data:image/png;base64,{{ graphs.signal_vs_time }}" class="experiment-graph">
-    </div>
-    {% endif %}
-    
-    {% if graphs.interference_pattern %}
-    <div class="graph-box">
-        <h4>Интерференционная картина</h4>
-        <img src="data:image/png;base64,{{ graphs.interference_pattern }}" class="experiment-graph">
-    </div>
-    {% endif %}
-    
-    {% if graphs.gamma_frequency %}
-    <div class="graph-box">
-        <h4>Зависимость γ от частоты</h4>
-        <img src="data:image/png;base64,{{ graphs.gamma_frequency }}" class="experiment-graph">
-    </div>
-    {% endif %}
-</div>
+<h1>Эксперимент #{{ experiment.id }}</h1>
+<p>Лаборант: {{ experiment.assistant.full_name }}</p>
+
+<h2>Данные с оборудования</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Время (мс)</th>
+            <th>Сигнал микрофона</th>
+            <th>Положение трубы (мм)</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for point in data_points %}
+        <tr>
+            <td>{{ point.time_ms }}</td>
+            <td>{{ point.microphone_signal }}</td>
+            <td>{{ point.tube_position }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not is_assistant %}
+<form method="post">
+    {% csrf_token %}
+    <button type="submit">Отправить расчеты</button>
+</form>
 {% endif %}
-
-<style>
-.experiment-graph {
-    max-width: 100%;
-    height: auto;
-    border: 1px solid #ddd;
-    padding: 10px;
-    margin-bottom: 20px;
-}
-
-.graphs-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
-    margin-top: 30px;
-}
-
-.graph-box {
-    background: white;
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-</style>
 {% endblock %}

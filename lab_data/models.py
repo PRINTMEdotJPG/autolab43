@@ -93,6 +93,17 @@ class UserManager(BaseUserManager):
         """
         extra_fields.setdefault('is_staff', False)
         extra_fields.setdefault('role', 'student')
+
+        def create_assistant(
+            self,
+            email: str,
+            full_name: str,
+            password: str = None,
+            **extra_fields
+        ) -> 'User':
+            extra_fields.setdefault('is_staff', True)
+            extra_fields.setdefault('role', 'assistant')
+            return self._create_user(email, full_name, password, **extra_fields)
         
         if 'email' not in extra_fields:
             # Генерация email если не предоставлен
@@ -159,6 +170,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
         ('student', 'Студент'),
         ('teacher', 'Преподаватель'),
+        ('assistant', 'Лаборант'),  # Новая роль
+
     ]
 
     # Основные поля модели
@@ -228,28 +241,29 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class Experiments(models.Model):
-    """Модель для хранения данных о проведенных экспериментах."""
-
     STATUS_CHOICES = [
-        ('started', 'Начат'),
-        ('in_progress', 'В процессе'),
+        ('preparing', 'Подготовка'),
+        ('stage_1', 'Этап 1 — запись'),  # Частота будет в stages[0].frequency
+        ('stage_2', 'Этап 2 — запись'),  # Аналогично
+        ('stage_3', 'Этап 3 — запись'),
         ('completed', 'Завершен'),
-        ('failed', 'Ошибка')
+        ('aborted', 'Прерван'),
     ]
     
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='experiments',
-        verbose_name="Пользователь"
-    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='experiments')
+
+    assistant = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assisted_experiments')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='started')
     step = models.IntegerField(default=1)  # Добавить
 
-    temperature = models.FloatField(verbose_name="Температура (°C)")
-    tube_length = models.FloatField(verbose_name="Длина трубы (м)")
+    temperature = models.FloatField(verbose_name="Температура (°C)", default=20.0)
+    tube_length = models.FloatField(verbose_name="Длина трубы (м)", default=0.5)
 
-    frequency = models.FloatField()  # Заменить frequencies
+    stages = models.JSONField(
+        default=list,
+        help_text="Данные этапов: ["
+                 "{'frequency': 1500, 'data': [...]}, "
+                 "{'frequency': 3000, 'data': [...]}, ...]")
 
     student_speed = models.FloatField(null=True)  # Добавить
     student_gamma = models.FloatField(null=True)  # Добавить

@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4>Вход для лаборантов</h4>
+                </div>
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+                        
+                        {% if form.non_field_errors %}
+                            <div class="alert alert-danger">
+                                {% for error in form.non_field_errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        
+                        <div class="mb-3">
+                            <label for="id_username" class="form-label">Email</label>
+                            <input type="text" name="username" class="form-control {% if form.username.errors %}is-invalid{% endif %}" 
+                                   id="id_username" value="{{ form.username.value|default:'' }}">
+                            {% for error in form.username.errors %}
+                                <div class="invalid-feedback">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="id_password" class="form-label">Пароль</label>
+                            <input type="password" name="password" class="form-control {% if form.password.errors %}is-invalid{% endif %}" 
+                                   id="id_password">
+                            {% for error in form.password.errors %}
+                                <div class="invalid-feedback">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary w-100">Войти</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

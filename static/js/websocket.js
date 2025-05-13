@@ -5,7 +5,8 @@ function setupWebSocket(app) {
     function connect() {
         return new Promise((resolve, reject) => {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/audio/`;
+            const experimentId = window.location.pathname.split('/').filter(Boolean).pop();
+            const wsUrl = `${protocol}//${window.location.host}/ws/experiment/${experimentId}/`;
             
             socket = new WebSocket(wsUrl);
 
@@ -34,11 +35,17 @@ function setupWebSocket(app) {
             socket.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    console.log('[WS] Received message:', data);
                     app.logger.debug('[WS] Получено сообщение', data);
                     
                     // Вызываем обработчик в core.js
                     if (app._handleWebSocketMessage) {
                         app._handleWebSocketMessage(data);
+                    }
+                    
+                    // Вызываем обработчик в app
+                    if (app.handleWebSocketMessage) {
+                        app.handleWebSocketMessage(data);
                     }
                 } catch (error) {
                     app.logger.error('[WS] Ошибка обработки сообщения', error);

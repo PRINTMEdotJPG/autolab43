@@ -1,13 +1,62 @@
-{% block content %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AutoLab{% endblock %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    
+    {% load static %}
+    <!-- Базовые стили -->
+    <link href="{% static 'css/main.css' %}" rel="stylesheet">
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">AutoLab</a>
+        </div>
+    </nav>
 
-{% if messages %}
-<div class="mt-3">
-    {% for message in messages %}
-    <div class="alert alert-{% if message.tags %}{{ message.tags }}{% else %}info{% endif %}">
-        {{ message }}
-    </div>
-    {% endfor %}
-</div>
-{% endif %}
+    <!-- Основной контент -->
+    <main class="container py-4">
+        {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                    <div class="alert alert-{% if message.tags %}{{ message.tags }}{% else %}info{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+        
+        {% block content %}{% endblock %}
+    </main>
 
-{% endblock %}
+    <!-- CSRF Token -->
+    <script>
+        const CSRF_TOKEN = '{{ csrf_token }}';
+    </script>
+
+    <!-- jQuery и Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Базовые скрипты -->
+    <script src="{% static 'js/core.js' %}"></script>
+    <script src="{% static 'js/websocket.js' %}"></script>
+    <script src="{% static 'js/charts.js' %}"></script>
+    <script src="{% static 'js/recording.js' %}"></script>
+    <script src="{% static 'js/logger.js' %}"></script>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

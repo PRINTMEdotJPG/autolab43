@@ -1,0 +1,167 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Управление экспериментом #{{ experiment.id }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    .chart-container {
+        position: relative;
+        height: 180px;
+        width: 100%;
+    }
+    .chart-container canvas {
+        max-width: 100%;
+        height: 100% !important;
+    }
+    .card-body {
+        padding: 0.75rem;
+    }
+    .chart-card {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .chart-card .card-title {
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+        color: #495057;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h4>Управление экспериментом #{{ experiment.id }}</h4>
+            <div class="d-flex justify-content-between align-items-center">
+                <span>Студент: {{ student.full_name }}</span>
+                <span class="badge bg-{% if experiment.status == 'completed' %}success{% else %}warning{% endif %}">
+                    {{ experiment.get_status_display }}
+                </span>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <!-- Блок параметров -->
+            <div class="mb-4 p-3 border rounded bg-light">
+                <h5 class="mb-3">Основные параметры</h5>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Температура (°C)</label>
+                        <input type="number" id="temperatureInput" class="form-control" 
+                               value="{{ experiment.temperature|default:'20.0' }}" min="10" max="40" step="0.1" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Блок графиков -->
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card">
+                        <div class="card-body">
+                            <h6 class="card-title">Этап 1</h6>
+                            <div class="chart-container">
+                                <canvas id="chart-step-1"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card">
+                        <div class="card-body">
+                            <h6 class="card-title">Этап 2</h6>
+                            <div class="chart-container">
+                                <canvas id="chart-step-2"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card">
+                        <div class="card-body">
+                            <h6 class="card-title">Этап 3</h6>
+                            <div class="chart-container">
+                                <canvas id="chart-step-3"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card">
+                        <div class="card-body">
+                            <h6 class="card-title">Итоговый график</h6>
+                            <div class="chart-container">
+                                <canvas id="finalChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Блок этапов -->
+            <div id="stagesContainer" class="mb-4">
+                <h5 class="mb-3">Этапы эксперимента</h5>
+                {% for stage in experiment.stages %}
+                <div class="stage-card mb-3 p-3 border rounded {% if forloop.first %}border-primary{% endif %}">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">Этап {{ forloop.counter }}</h6>
+                        <span class="badge bg-{% if stage.data %}success{% else %}secondary{% endif %}">
+                            {% if stage.data %}Завершен{% else %}Ожидает{% endif %}
+                        </span>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label">Частота (Гц)</label>
+                            <input type="number" class="form-control stage-freq" 
+                                   value="{{ stage.frequency|default:'' }}" min="1000" max="6000" required>
+                        </div>
+                        <div class="col-md-6 mb-2 d-flex align-items-end">
+                            <button class="btn btn-{% if stage.data %}outline-success{% else %}primary{% endif %} record-btn w-100"
+                                    data-stage="{{ forloop.counter }}"
+                                    {% if stage.data %}disabled{% endif %}>
+                                <i class="bi bi-{% if stage.data %}check-circle{% else %}record-circle{% endif %}"></i>
+                                {% if stage.data %}Завершен{% else %}Начать запись{% endif %}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="stage-progress mt-2" style="display: none;">
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <small class="text-muted mt-1 d-block">Идет запись данных...</small>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Блок управления -->
+            <div class="d-flex justify-content-between mt-4">
+                <button id="saveParamsBtn" class="btn btn-success px-4">
+                    <i class="bi bi-save"></i> Сохранить параметры
+                </button>
+                <button id="completeExperimentBtn" class="btn btn-primary px-4"
+                        {% if experiment.status == 'completed' %}disabled{% endif %}>
+                    <i class="bi bi-flag-fill"></i> Завершить эксперимент
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/assistant_control.js' %}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM загружен, инициализация приложения...');
+        initializeApp().then(success => {
+            if (success) {
+                console.log('Приложение успешно инициализировано');
+            } else {
+                console.error('Ошибка при инициализации приложения');
+            }
+        });
+    });
+</script>
+{% endblock %}

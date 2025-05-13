@@ -1,349 +1,190 @@
-function AudioRecorderApp() {
-    // Инициализация логгера
-    this.logger = setupLogger(this);
-    this.log = (message, type) => {
-        const method = type ? this.logger[type.toLowerCase()] || this.logger.info : this.logger.info;
-        method.call(this.logger, message);
-    };    this.logger.debug('[CORE] Инициализация приложения');
-    
-    // Состояние приложения
-    this.currentStep = 0;
-    this.maxSteps = 3;
-    this.stepsData = [];
-    
-    this.experimentStarted = false;
-
-    try {
-        // Инициализация модулей
-        this.ws = setupWebSocket(this);
-        this.recording = setupRecording(this);
-        this.ui = setupUI(this);
-        this.validation = setupValidation(this);
-
-        // Настройка обработчиков
-        this._setupWebSocketHandlers();
-
-        // Подключение WebSocket
-        this.ws.connect().then(() => {
-            this.logger.info('[CORE] WebSocket подключен');
-        }).catch(error => {
-            this.logger.error('[CORE] Ошибка подключения', error);
+/**
+ * Основной модуль управления экспериментом
+ */
+class ExperimentCore {
+    constructor() {
+      this.currentExperimentId = null;
+      this.currentStudentId = null;
+      this.equipmentConnected = false;
+      this.isRecording = false;
+      this.experimentData = {
+        parameters: {},
+        measurements: [],
+        results: {}
+      };
+  
+      this.init();
+    }
+  
+    init() {
+      this.initDOMReferences();
+      this.initEventListeners();
+      this.checkEquipmentSupport();
+    }
+  
+    initDOMReferences() {
+      this.dom = {
+        startBtn: document.getElementById('startExperiment'),
+        studentSelect: document.getElementById('studentSelect'),
+        equipmentStatus: document.getElementById('equipmentStatus'),
+        recordBtn: document.getElementById('recordBtn'),
+        paramsForm: document.getElementById('paramsForm')
+      };
+    }
+  
+    initEventListeners() {
+      if (this.dom.startBtn) {
+        this.dom.startBtn.addEventListener('click', () => this.startExperiment());
+      }
+  
+      if (this.dom.recordBtn) {
+        this.dom.recordBtn.addEventListener('click', () => this.toggleRecording());
+      }
+  
+      if (this.dom.paramsForm) {
+        this.dom.paramsForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          this.saveParameters();
         });
-
-        this.currentExperimentId = null;
-
-        this.logger.info('[CORE] Приложение готово к работе');
-        this.arduino = window.initArduinoModule ? initArduinoModule(this) : null;
-
-        
-    } catch (error) {
-        this.logger.error('[CORE] Ошибка инициализации', error);
-        throw error;
+      }
     }
-
-    try {
-        initArduinoModule(this);
-        this.logger.info('[CORE] Модуль Arduino инициализирован');
-    }
-    catch (error) {
-        this.logger.error('[CORE] Ошибка инициализации модуля Arduino', error);
-        throw error;
-    }
-
-    this.getCSRFToken = function() {
-        const cookieValue = document.cookie
-            .split('; ')
-            .find(row => row.startsWith('csrftoken='))
-            ?.split('=')[1];
-        return cookieValue || '';
-    };
-    
-    // Заменяем текущую реализацию на:
-AudioRecorderApp.prototype.showNotification = function(message, type = 'info') {
-    const consoleMethods = {
-        'error': 'error',
-        'warn': 'warn',
-        'info': 'log',
-        'success': 'log',
-        'debug': 'debug'
-    };
-    
-    const consoleMethod = consoleMethods[type] || 'log';
-    const styles = {
-        'error': 'color: red; font-weight: bold;',
-        'success': 'color: green; font-weight: bold;',
-        'warn': 'color: orange;',
-        'info': 'color: blue;',
-        'debug': 'color: gray;'
-    };
-    
-    // Логируем в консоль с оформлением
-    console[consoleMethod](`%c[${type.toUpperCase()}] ${message}`, styles[type] || '');
-    
-    // Логируем в систему логгирования
-    if (this.logger) {
-        const logMethod = this.logger[type] || this.logger.info;
-        logMethod.call(this.logger, `[UI] ${message}`);
-    }
-    
-    // Показываем UI уведомление (если подключен UI модуль)
-    if (this.ui && this.ui.showNotification) {
-        this.ui.showNotification(message, type);
-    }
-};
-}
-
-AudioRecorderApp.prototype._setupWebSocketHandlers = function() {
-    // Устанавливаем обработчик сообщений в объекте приложения
-    this._handleWebSocketMessage = (data) => {
-        try {
-            console.log("Processing WebSocket message:", data);
-            
-            switch(data.type) {
-                case 'step_confirmation':
-                    console.log("Handling step confirmation");
-                    this.handleStepConfirmation(data);
-                    break;
-                case 'minima_data':
-                    this.handleMinimaData(data);
-                    break;
-                case 'experiment_complete':
-                    this.handleExperimentCompletion(data);
-                    break;
-                case 'verification_result':
-                    this.handleVerificationResult(data);
-                    break;
-                default:
-                    this.logger.warn('[CORE] Неизвестный тип сообщения', data);
-            }
-        } catch (error) {
-            console.error("Error in message handler:", error);
-            this.logger.error('[CORE] Ошибка обработки сообщения', error);
-        }
-    };
-
-    // Получаем сокет и настраиваем обработчики
-    const socket = this.ws.getSocket();
-    if (!socket) {
-        this.logger.warn('[CORE] WebSocket недоступен');
+  
+    async startExperiment() {
+      if (!this.currentStudentId) {
+        this.showAlert('Выберите студента!', 'error');
         return;
-    }
-
-    // Обработчики ошибок и закрытия соединения остаются здесь
-    socket.onerror = (error) => {
-        this.logger.error('[CORE] Ошибка WebSocket', error);
-    };
-
-    socket.onclose = () => {
-        this.logger.warn('[CORE] Соединение закрыто');
-    };
-
-    // Обработчик onmessage теперь в websocket.js
-    this.logger.debug('[CORE] WebSocket handlers установлены');
-};
-
-AudioRecorderApp.prototype.startNewExperiment = function() {
-    return fetch('/api/start-experiment/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': this.getCSRFToken()
+      }
+  
+      try {
+        const response = await this.apiCall('/api/start-experiment/', {
+          student_id: this.currentStudentId
+        });
+  
+        if (response.status === 'success') {
+          this.currentExperimentId = response.experiment_id;
+          this.showExperimentUI();
+          this.connectToEquipment();
         }
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Network response was not ok');
-        return response.json();
-    })
-    .then(data => {
-        if (data.status === 'success') {
-            this.currentExperimentId = data.experiment_id;
-            return this.currentExperimentId;
+      } catch (error) {
+        this.showAlert(`Ошибка: ${error.message}`, 'error');
+      }
+    }
+  
+    async connectToEquipment() {
+      try {
+        if (window.SerialPort) {
+          this.port = await navigator.serial.requestPort();
+          await this.port.open({ baudRate: 9600 });
+          this.equipmentConnected = true;
+          this.updateEquipmentStatus();
+          this.startReadingData();
         } else {
-            throw new Error(data.message || 'Unknown error');
+          this.useSimulation();
         }
-    });
-};
-
-AudioRecorderApp.prototype.startExperiment = async function() {
-    if (this.experimentStarted) {
-        this.logger.warn('[CORE] Эксперимент уже начат');
-        return;
+      } catch (error) {
+        this.showAlert(`Ошибка подключения: ${error.message}`, 'error');
+      }
     }
-    
-    try {
-        this.logger.info('[CORE] Запрос на старт эксперимента');
-        await this.startNewExperiment();
-        
-        this.currentStep = 1;
-        this.stepsData = Array(this.maxSteps).fill().map((_, i) => ({
-            step: i + 1,
-            minima: [],
-            frequency: null,
-            temperature: null,
-            status: 'pending'
-        }));
-        this.experimentStarted = true;
-        
-        this.ui.showStepForm();
-        this.logger.info('[CORE] Эксперимент начат. ID:', this.currentExperimentId);
-        this.showNotification('Эксперимент успешно начат', 'success');
-        
-    } catch (error) {
-        this.logger.error('[CORE] Ошибка старта эксперимента:', error);
-        this.showNotification(`Ошибка начала эксперимента: ${error.message}`, 'error');
-        throw error; // Пробрасываем ошибку дальше
-    }
-};
-
-AudioRecorderApp.prototype.handleStepConfirmation = function(data) {
-    console.log("Step confirmation data:", data); // Добавляем лог
-    if (!data.step) {
-        this.logger.error('[CORE] Invalid step confirmation: missing step');
-        return;
-    }
-    this.ui.prepareNextStep(data.step);
-    this.logger.info(`[CORE] Подтвержден шаг ${data.step}`);
-};
-
-AudioRecorderApp.prototype.handleMinimaData = function(data) {
-    this.stepsData[data.step - 1] = {
-        ...this.stepsData[data.step - 1],
-        ...data,
-        status: 'processed'
-    };
-
-    if (window.renderMinimaChart) {
-        window.renderMinimaChart(data.minima, data.step, data.frequency);
-    }
-
-    if (data.step < this.maxSteps) {
-        this.currentStep = data.step + 1;
-        this.ui.showStepForm();
-    }
-};
-
-AudioRecorderApp.prototype.handleExperimentCompletion = function() {
-    this.ui.showResultsForm();
-    if (window.renderCombinedChart) {
-        window.renderCombinedChart(this.stepsData);
-    }
-    this.logger.info('[CORE] Эксперимент завершен');
-};
-
-AudioRecorderApp.prototype.handleVerificationResult = function(data) {
-    this.validationResult = data; // Сохраняем результаты валидации
-    this.ui.showValidationResult(data);
-    document.getElementById('saveResultsBtn').addEventListener('click', () => {
-        this.saveExperimentResults();
-    });
-    document.getElementById('restartExperimentBtn').addEventListener('click', () => {
-        this.resetExperiment();
-    });
-    this.logger.info('[CORE] Получены результаты проверки');
-};
-
-// Новый метод для сохранения результатов
-AudioRecorderApp.prototype.saveExperimentResults = function() {
-    if (!this.currentExperimentId) {
-        this.logger.error('[CORE] Experiment ID is not defined');
-        this.showNotification('Эксперимент не начат', 'error');
-        return;
-    }
-
-    // Подготавливаем данные для сохранения
-    const saveData = {
-        final_results: {
-            system_speed: this.validationResult?.system_speed || 0,
-            system_gamma: this.validationResult?.system_gamma || 0,
-            student_speed: this.validationResult?.student_speed || 0,
-            student_gamma: this.validationResult?.student_gamma || 0,
-            error_percent: this.validationResult?.error_percent || 0
-        },
-        steps: this.stepsData.map(step => ({
-            step: step.step,
-            frequency: step.frequency,
-            temperature: step.temperature,
-            minima: step.minima,
-            status: step.status
-        }))
-    };
-
-    fetch(`/api/save-experiment/${this.currentExperimentId}/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': this.getCSRFToken()
-        },
-        body: JSON.stringify(saveData)
-    })
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => { throw err; });
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.status === 'success') {
-            this.logger.info('[CORE] Результаты сохранены');
-            this.showNotification('Данные успешно сохранены', 'success');
-        } else {
-            throw new Error(data.message || 'Unknown error');
-        }
-    })
-    .catch(error => {
-        this.logger.error('[CORE] Ошибка сохранения', error);
-        this.showNotification('Ошибка сохранения: ' + (error.message || 'Неизвестная ошибка'), 'error');
-    });
-};
-
-AudioRecorderApp.prototype.resetExperiment = function() {
-    this.currentStep = 0;
-    this.stepsData = [];
-    this.experimentStarted = false;
-    this.ui.resetUI();
-    this.logger.info('[CORE] Эксперимент сброшен');
-};
-
-AudioRecorderApp.prototype.initArduino = async function() {
-    try {
-        this.arduinoPort = await navigator.serial.requestPort();
-        await this.arduinoPort.open({ baudRate: 115200 });
-        this.logger.info('[CORE] Arduino подключен');
-        
-        this.arduinoReader = this.arduinoPort.readable.getReader();
-        this._readArduinoData();
-        
-    } catch (error) {
-        this.logger.error('[CORE] Ошибка подключения к Arduino', error);
-    }
-};
-
-AudioRecorderApp.prototype._readArduinoData = async function() {
-    while (true) {
-        const { value, done } = await this.arduinoReader.read();
+  
+    async startReadingData() {
+      const reader = this.port.readable.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
         if (done) break;
-        
-        try {
-            const data = JSON.parse(new TextDecoder().decode(value));
-            if (data.type === 'distance') {
-                this._handleDistanceData(data.value);
-            }
-        } catch (e) {
-            this.logger.warn('[CORE] Некорректные данные с Arduino');
-        }
+        this.processEquipmentData(value);
+      }
     }
-};
-
-AudioRecorderApp.prototype._handleDistanceData = function(distance) {
-    if (!this.experimentStarted) return;
-    
-    this.stepsData[this.currentStep-1].distance = distance;
-    this.ws.send(JSON.stringify({
-        type: "distance_update",
-        step: this.currentStep,
-        distance: distance
-    }));
-};
-
-// Экспорт класса
-window.AudioRecorderApp = AudioRecorderApp;
+  
+    processEquipmentData(data) {
+      try {
+        const parsed = JSON.parse(data);
+        this.experimentData.measurements.push(parsed);
+        this.updateLiveData(parsed);
+      } catch (e) {
+        console.error('Ошибка обработки данных:', e);
+      }
+    }
+  
+    toggleRecording() {
+      this.isRecording = !this.isRecording;
+      if (this.isRecording) {
+        this.experimentData.measurements = [];
+        this.dom.recordBtn.textContent = 'Стоп';
+      } else {
+        this.saveMeasurements();
+        this.dom.recordBtn.textContent = 'Запись';
+      }
+    }
+  
+    async saveMeasurements() {
+      try {
+        await this.apiCall(`/api/save-data/${this.currentExperimentId}/`, {
+          measurements: this.experimentData.measurements
+        });
+        this.showAlert('Данные сохранены!', 'success');
+      } catch (error) {
+        this.showAlert(`Ошибка сохранения: ${error.message}`, 'error');
+      }
+    }
+  
+    async saveParameters() {
+      const params = {
+        temperature: parseFloat(document.getElementById('temperature').value),
+        frequency: parseFloat(document.getElementById('frequency').value)
+      };
+  
+      try {
+        await this.apiCall(`/api/save-params/${this.currentExperimentId}/`, params);
+        this.experimentData.parameters = params;
+        this.showAlert('Параметры сохранены!', 'success');
+      } catch (error) {
+        this.showAlert(`Ошибка сохранения: ${error.message}`, 'error');
+      }
+    }
+  
+    async apiCall(url, data) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': this.getCSRFToken()
+        },
+        body: JSON.stringify(data)
+      });
+      return await response.json();
+    }
+  
+    getCSRFToken() {
+      return document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+  
+    updateEquipmentStatus() {
+      if (this.dom.equipmentStatus) {
+        this.dom.equipmentStatus.innerHTML = `
+          <div class="alert ${this.equipmentConnected ? 'alert-success' : 'alert-danger'}">
+            Оборудование: ${this.equipmentConnected ? 'Подключено' : 'Отключено'}
+          </div>
+        `;
+      }
+    }
+  
+    showAlert(message, type) {
+      const alert = document.createElement('div');
+      alert.className = `alert alert-${type}`;
+      alert.textContent = message;
+      document.getElementById('alertsContainer').appendChild(alert);
+      setTimeout(() => alert.remove(), 3000);
+    }
+  
+    useSimulation() {
+      console.log('Using simulated data');
+      this.equipmentConnected = true;
+      this.updateEquipmentStatus();
+      // Здесь можно добавить логику симуляции данных
+    }
+  }
+  
+  // Инициализация только для лаборантов
+  if (document.getElementById('experimentApp')) {
+    window.experimentCore = new ExperimentCore();
+  }

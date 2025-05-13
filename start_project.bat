@@ -65,7 +65,7 @@ python manage.py collectstatic --noinput
 
 REM 8. Запуск сервера через Daphne
 echo Запуск сервера через Daphne...
-start "" /B daphne -b 0.0.0.0 -p 8000 your_project.asgi:application
+start "" /B daphne -b 0.0.0.0 -p 8000 autolab.asgi:application
 
 echo ======================================================
 echo Сервер запущен!

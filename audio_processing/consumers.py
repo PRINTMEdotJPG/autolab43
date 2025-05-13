@@ -367,6 +367,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 return
 
             logger.info(f"Обработка аудио для шага {step}")
+            logger.debug(f"Текущие шаги эксперимента: {self.experiment_steps}")
 
             try:
                 audio_bytes = base64.b64decode(audio_data)
@@ -378,6 +379,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 # Находим минимумы и сопоставляем с расстояниями
                 minima = self.find_minima(filtered, self.sample_rate)
                 
+                # Проверяем наличие данных для текущего шага
+                if step > len(self.experiment_steps):
+                    logger.error(f"Шаг {step} не инициализирован. Доступные шаги: {len(self.experiment_steps)}")
+                    await self.send_error(f"Параметры для шага {step} не были установлены")
+                    return
+
                 if step <= len(self.experiment_steps):
                     self.experiment_steps[step-1].update({
                         'audio_samples': samples.tolist(),
@@ -799,7 +806,9 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 if self.distance_timestamps and self.distance_samples:
                     try:
                         closest_idx = np.argmin(np.abs(np.array(self.distance_timestamps) - time_at_minima))
+                        
                         distance = self.distance_samples[closest_idx] if closest_idx < len(self.distance_samples) else 0
+                        logger.info("Дистанция минимума = ", distance)                    
                     except ValueError:
                         logger.warning("Не удалось найти ближайшее расстояние")
                 

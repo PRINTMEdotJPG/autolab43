@@ -12,6 +12,8 @@ from django.views import View
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 from django.core.exceptions import PermissionDenied
+from django.contrib.auth import login as authenticate
+from django.contrib.auth import get_user_model
 from typing import Dict, Any, Optional
 import json
 import logging
@@ -21,7 +23,7 @@ from config import config
 
 from .models import User, Experiments, EquipmentData, Results
 from .imitate_module.sensors_simulator import ExperimentSimulator
-from .forms import StudentLoginForm, TeacherLoginForm, StudentResultForm
+from .forms import StudentLoginForm, TeacherLoginForm, StudentResultForm, AssistantLoginForm
 from .generate_graphs import (
     generate_gamma_frequency_graph,
     generate_interference_graph,
@@ -234,179 +236,22 @@ class TeacherLoginView(View):
         })
 
 
-@login_required
-@require_http_methods(["POST"])
-def start_experiment(request) -> JsonResponse:
-    """
-    Запуск лабораторного эксперимента (только для студентов).
-
-    Args:
-        request: HttpRequest объект
-
-    Returns:
-        JsonResponse: Результат выполнения эксперимента
-    """
-    try:
-        if request.user.role != 'student':
-            logger.warning(
-                f"User {request.user.email} tried to start experiment without permission"
-            )
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Только студенты могут запускать эксперименты'
-            }, status=403)
-
-        logger.info(f"Starting experiment for student {request.user.email}")
-        simulator = ExperimentSimulator()
-        experiment_data = json.loads(simulator.run_experiment())
-        logger.debug("Experiment data generated successfully")
-
-        # Валидация данных
-        if 'details' not in experiment_data or not isinstance(experiment_data['details'], list):
-            error_msg = "Некорректная структура данных эксперимента"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        successful_experiment = next(
-            (exp for exp in experiment_data['details'] if exp.get('status') == 'success'),
-            None
-        )
-
-        if not successful_experiment:
-            error_msg = "Не удалось получить успешные результаты эксперимента"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        if 'sensor_data' not in successful_experiment:
-            error_msg = "Отсутствуют данные сенсоров"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Сохранение эксперимента
-        experiment = Experiments.objects.create(
-            user=request.user,
-            temperature=experiment_data['temperature'],
-            tube_length=0.5
-        )
-        logger.info(f"Experiment {experiment.id} created")
-
-        # Сохранение данных оборудования
-        equipment_data = []
-        for data_point in successful_experiment['sensor_data'][:1000]:
-            equipment_data.append(EquipmentData(
-                experiment=experiment,
-                time_ms=data_point.get('time_ms', 0),
-                microphone_signal=int(data_point.get('microphone_signal', 0)),
-                tube_position=data_point.get('tube_position', 0),
-                voltage=data_point.get('voltage', 5.0)
-            ))
-
-        EquipmentData.objects.bulk_create(equipment_data)
-        logger.debug(f"Saved {len(equipment_data)} equipment data points")
-
-        # Сохранение результатов
-        Results.objects.create(
-            experiment=experiment,
-            gamma_calculated=experiment_data['gamma_calculated'],
-            gamma_reference=1.4,
-            error_percent=experiment_data.get('error_percent', 0),
-            status='pending',
-            detailed_results=experiment_data
-        )
-        logger.info("Experiment results saved successfully")
-
-        return JsonResponse({
-            'status': 'success',
-            'experiment_id': experiment.id,
-            'gamma': experiment_data['gamma_calculated'],
-            'error_percent': experiment_data.get('error_percent', 0)
-        })
-
-    except Exception as e:
-        logger.error(
-            f"Experiment error: {str(e)}\nData: {experiment_data if 'experiment_data' in locals() else 'N/A'}",
-            exc_info=True
-        )
-        return JsonResponse({
-            'status': 'error',
-            'message': f'Ошибка проведения эксперимента: {str(e)}'
-        }, status=500)
 
 
 @login_required
-def experiment_results(request, experiment_id: int) -> HttpResponse:
-    """
-    Отображение результатов эксперимента.
-
-    Args:
-        request: HttpRequest объект
-        experiment_id: ID эксперимента
-
-    Returns:
-        HttpResponse: Отрендеренный шаблон results.html
-    """
-    logger.info(f"Accessing experiment {experiment_id} results")
+def experiment_results(request, experiment_id):
     experiment = get_object_or_404(Experiments, id=experiment_id)
     
-    if experiment.user != request.user and not request.user.is_staff:
-        logger.warning(
-            f"User {request.user.email} tried to access experiment {experiment_id} without permission"
-        )
+    if request.user != experiment.user and request.user != experiment.assistant:
         raise PermissionDenied
-
-    result = get_object_or_404(Results, experiment=experiment)
-    data_points = EquipmentData.objects.filter(
-        experiment=experiment
-    ).order_by('time_ms')
-    logger.debug(f"Retrieved {len(data_points)} data points for experiment")
-
-    # Генерация графиков
-    try:
-        graphs = {
-            'interference_pattern': generate_interference_graph(data_points),
-        }
-        logger.debug("Graphs generated successfully")
-    except Exception as e:
-        logger.error(f"Graph generation failed: {str(e)}", exc_info=True)
-        graphs = None
-
-    form = StudentResultForm(request.POST or None)
-    needs_retry = False
-
-    if request.method == 'POST' and form.is_valid():
-        student_gamma = form.cleaned_data['gamma']
-        result.student_gamma = student_gamma
-        result.student_error = abs(student_gamma - 1.4) / 1.4 * 100
-        logger.info(
-            f"Student {request.user.email} submitted gamma: {student_gamma:.3f} "
-            f"(error: {result.student_error:.2f}%)"
-        )
-
-        if result.student_error > 5:
-            needs_retry = True
-            logger.warning("Student result exceeds 5% error threshold")
-            messages.warning(
-                request,
-                f"Отклонение {result.student_error:.2f}% > 5%. "
-                "Пожалуйста, перепроверьте расчеты!"
-            )
-        else:
-            result.status = 'success'
-            result.save()
-            logger.info("Student result accepted and saved")
-            messages.success(request, "Результаты успешно сохранены!")
-            return redirect('experiment_results', experiment_id=experiment_id)
-
+    
+    data_points = EquipmentData.objects.filter(experiment=experiment).order_by('time_ms')
     context = {
         'experiment': experiment,
-        'result': result,
-        'form': form,
-        'needs_retry': needs_retry,
-        'data_points': data_points[:100],
-        'graphs': graphs
+        'data_points': data_points,
+        'is_assistant': request.user == experiment.assistant
     }
     return render(request, 'experiment/results.html', context)
-
 
 @login_required
 def retry_experiment(request, experiment_id: int) -> HttpResponse:
@@ -636,3 +481,266 @@ def start_experiment_api(request):
             'status': 'error',
             'message': str(e)
         }, status=500)
+    
+@login_required
+def assistant_dashboard(request):
+    if request.user.role != 'assistant':
+        return HttpResponseForbidden()
+    
+    logger.info(f"Assistant {request.user.id} accessed dashboard")
+    
+    # Получаем активные эксперименты для текущего лаборанта
+    active_experiments = Experiments.objects.filter(
+        assistant=request.user,
+        status__in=['preparing', 'stage_1', 'stage_2', 'stage_3']
+    ).select_related('user')
+    
+    logger.info(f"Found {active_experiments.count()} experiments")
+    
+    return render(request, 'home.html', {
+        'active_experiments': active_experiments,
+        'students': User.objects.filter(role='student').order_by('full_name')
+    })
+
+@login_required
+@require_http_methods(["POST"])
+def assistant_start_experiment(request):
+    """Создание эксперимента с начальными параметрами"""
+    logger.info(f"Start experiment request from {request.user}")
+    print(f"DEBUG: Start experiment request from {request.user}")
+
+    try:
+        if request.user.role != 'assistant':
+            logger.warning(f"User {request.user} is not an assistant")
+            return JsonResponse({'status': 'error', 'message': 'Только для лаборантов'}, status=403)
+
+        data = json.loads(request.body)
+        student_id = data.get('student_id')
+        temperature = float(data.get('temperature', 20.0))
+
+        logger.info(f"Creating experiment for student {student_id}")
+        print(f"DEBUG: Creating experiment for student {student_id}")
+
+        if not student_id:
+            logger.error("No student_id provided")
+            return JsonResponse({'status': 'error', 'message': 'Не указан студент'}, status=400)
+
+        student = get_object_or_404(User, id=student_id, role='student')
+
+        experiment = Experiments.objects.create(
+            user=student,
+            assistant=request.user,
+            temperature=temperature,
+            status='preparing',
+            stages=[{"frequency": None, "data": []} for _ in range(3)]
+        )
+
+        logger.info(f"Experiment {experiment.id} created successfully")
+        print(f"DEBUG: Experiment {experiment.id} created")
+
+        return JsonResponse({
+            'status': 'success',
+            'experiment_id': experiment.id,
+            'student_name': student.full_name,
+            'temperature': temperature
+        })
+    except Exception as e:
+        logger.error(f"Error creating experiment: {str(e)}")
+        print(f"ERROR: {str(e)}")
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+@login_required
+def upload_experiment_data(request, experiment_id):
+    experiment = get_object_or_404(Experiments, id=experiment_id)
+    
+    if request.user != experiment.assistant:
+        return JsonResponse({'status': 'error', 'message': 'Доступ запрещен'}, status=403)
+    
+    try:
+        data = json.loads(request.body)
+        EquipmentData.objects.create(
+            experiment=experiment,
+            time_ms=data['time_ms'],
+            microphone_signal=data['microphone_signal'],
+            tube_position=data['tube_position'],
+            voltage=data['voltage']
+        )
+        return JsonResponse({'status': 'success'})
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    
+
+class AssistantLoginView(View):
+    template_name = 'auth/assistant_login.html'
+    
+    def get(self, request):
+        form = AssistantLoginForm()
+        return render(request, self.template_name, {'form': form})
+
+    def post(self, request):
+        form = AssistantLoginForm(data=request.POST, request=request)
+        
+        if form.is_valid():
+            user = form.get_user()
+            auth_login(request, user)
+            messages.success(request, f"Добро пожаловать, {user.full_name}!")
+            return redirect('assistant_dashboard')
+        
+        # Логируем ошибки формы
+        for field, errors in form.errors.items():
+            for error in errors:
+                logger.error(f"Login error - {field}: {error}")
+        
+        return render(request, self.template_name, {'form': form})
+
+@login_required
+def get_student_experiments(request):
+    if request.user.role != 'student':
+        return JsonResponse({'status': 'error', 'message': 'Доступ запрещен'}, status=403)
+    
+    experiments = Experiments.objects.filter(user=request.user).values(
+        'id', 'created_at', 'status', 'assistant__full_name'
+    )
+    return JsonResponse({'experiments': list(experiments)})
+
+
+
+@login_required
+@require_http_methods(["POST"])
+def add_experiment_stage(request, experiment_id):
+    """Добавление этапа с частотой."""
+    try:
+        experiment = get_object_or_404(Experiments, id=experiment_id)
+        if request.user != experiment.assistant:
+            return JsonResponse({'status': 'error', 'message': 'Нет прав'}, status=403)
+
+        data = json.loads(request.body)
+        frequency = float(data.get('frequency'))
+
+        if not (1000 <= frequency <= 6000):
+            return JsonResponse({'status': 'error', 'message': 'Частота должна быть 1000-6000 Гц'}, status=400)
+
+        experiment.stages.append({
+            'frequency': frequency,
+            'data': [],
+            'created_at': timezone.now().isoformat()
+        })
+        
+        # Обновляем статус
+        if len(experiment.stages) == 1:
+            experiment.status = 'stage_1'
+        elif len(experiment.stages) == 2:
+            experiment.status = 'stage_2'
+        elif len(experiment.stages) >= 3:
+            experiment.status = 'stage_3'
+
+        experiment.save()
+
+        return JsonResponse({
+            'status': 'success',
+            'stage_number': len(experiment.stages),
+            'current_stage': experiment.status
+        })
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+@login_required
+@require_http_methods(["POST"])
+def upload_experiment_data(request, experiment_id):
+    """Загрузка данных с оборудования."""
+    try:
+        experiment = get_object_or_404(Experiments, id=experiment_id)
+        if request.user != experiment.assistant:
+            return JsonResponse({'status': 'error', 'message': 'Доступ запрещен'}, status=403)
+
+        data = json.loads(request.body)
+        current_stage = int(data.get('stage', 1)) - 1
+        
+        if current_stage >= len(experiment.stages):
+            return JsonResponse({'status': 'error', 'message': 'Неверный номер этапа'}, status=400)
+
+        # Добавляем данные в текущий этап
+        experiment.stages[current_stage]['data'].append({
+            'time_ms': data['time_ms'],
+            'microphone_signal': data['microphone_signal'],
+            'tube_position': data['tube_position'],
+            'voltage': data['voltage']
+        })
+        experiment.save()
+
+        return JsonResponse({'status': 'success'})
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+@login_required
+def home_view(request):
+    context = {}
+    
+    if request.user.role == 'assistant':
+        logger.info(f"Assistant {request.user.email} accessed home page")
+        context['active_experiments'] = Experiments.objects.filter(
+            assistant=request.user,
+            status__in=['preparing', 'stage_1', 'stage_2', 'stage_3']
+        ).select_related('user')
+        context['students'] = User.objects.filter(role='student').order_by('full_name')
+        logger.info(f"Found {len(context['active_experiments'])} active experiments")
+
+    return render(request, 'home.html', context)
+
+@login_required
+def experiment_control_view(request, experiment_id):
+    """Контрольная панель эксперимента для лаборанта"""
+    experiment = get_object_or_404(Experiments, id=experiment_id)
+    print(f"DEBUG: Opening experiment {experiment_id}")
+    
+    if request.user != experiment.assistant:
+        raise PermissionDenied
+    
+    # Если этапов нет - инициализируем 3 пустых этапа
+    if not experiment.stages:
+        experiment.stages = [{"frequency": None, "data": []} for _ in range(3)]
+        experiment.save()
+    
+    return render(request, 'experiment/control.html', {
+        'experiment': experiment,
+        'student': experiment.user
+    })
+
+@login_required
+@require_http_methods(["POST"])
+def save_experiment_params(request, experiment_id):
+    """Сохранение параметров эксперимента"""
+    try:
+        experiment = get_object_or_404(Experiments, id=experiment_id)
+        if request.user != experiment.assistant:
+            return JsonResponse({'status': 'error', 'message': 'Нет прав'}, status=403)
+
+        data = json.loads(request.body)
+        experiment.temperature = float(data['temperature'])
+        
+        # Обновляем частоты для всех этапов
+        for i, freq in enumerate(data['frequencies']):
+            if i < len(experiment.stages):
+                experiment.stages[i]['frequency'] = float(freq) if freq else None
+        
+        experiment.save()
+        return JsonResponse({'status': 'success'})
+
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+@login_required
+@require_http_methods(["POST"])
+def complete_experiment(request, experiment_id):
+    """Завершение эксперимента"""
+    try:
+        experiment = get_object_or_404(Experiments, id=experiment_id)
+        if request.user != experiment.assistant:
+            return JsonResponse({'status': 'error', 'message': 'Нет прав'}, status=403)
+
+        experiment.status = 'completed'
+        experiment.save()
+        return JsonResponse({'status': 'success'})
+
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
