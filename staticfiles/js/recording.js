@@ -3,6 +3,7 @@ function setupRecording(app) {
     let mediaStream = null;
     let isRecording = false;
     let audioChunks = [];
+    let currentDistanceData = null;
 
     async function start() {
         app.logger.info('[RECORDER] start function called.');
@@ -89,19 +90,24 @@ function setupRecording(app) {
                 step: app.currentStep,
                 frequency: app.stepsData[app.currentStep-1]?.frequency,
                 temperature: app.stepsData[app.currentStep-1]?.temperature,
+                distances: currentDistanceData && currentDistanceData.distances ? currentDistanceData.distances : [],
+                timestamps: currentDistanceData && currentDistanceData.timestamps ? currentDistanceData.timestamps : [],
                 duration: audioBlob.size / (128000 / 8) // Примерная длительность
             };
-            app.logger.info('[RECORDER] Sending complete_audio message:', message);
+            app.logger.info('[RECORDER] Sending complete_audio message:', JSON.parse(JSON.stringify(message)));
             app.ws.send(JSON.stringify(message));
             app.logger.info('[RECORDER] complete_audio message sent.');
+            currentDistanceData = null;
 
         } catch (error) {
             app.logger.error(`[RECORDER] Ошибка обработки аудио: ${error.message}`, error);
         }
     }
 
-    async function stop() { // Изменено на async, так как start может его вызывать и быть await
-        app.logger.info('[RECORDER] stop function called.');
+    async function stop(distanceData) {
+        app.logger.info('[RECORDER] stop function called.', distanceData ? 'With distanceData' : 'Without distanceData');
+        currentDistanceData = distanceData;
+
         if (mediaRecorder) {
             app.logger.info(`[RECORDER] In stop: mediaRecorder.state = ${mediaRecorder.state}, isRecording = ${isRecording}`);
         } else {

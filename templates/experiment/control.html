@@ -30,7 +30,44 @@
 {% endblock %}
 
 {% block content %}
-<div class="container mt-4">
+<div class="container py-4">
+    <h1 class="mb-4">Управление экспериментом #{{ experiment.id }}</h1>
+    
+    <!-- Добавляем блок для подключения Arduino -->
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">Подключение к Arduino</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <span>Статус подключения:</span>
+                <span id="directEquipmentStatus" class="badge badge-danger">Отключено</span>
+            </div>
+            
+            <!-- Добавляем блок для отображения текущего расстояния -->
+            <div class="mb-3 p-2 border rounded bg-light">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>Текущее расстояние:</span>
+                    <span id="currentDistance" class="badge bg-info">-- см</span>
+                </div>
+                <small class="text-muted">Обновляется в реальном времени при записи</small>
+            </div>
+            
+            <div class="mb-3">
+                <div class="input-group">
+                    <input type="text" id="directPortInput" class="form-control" 
+                           value="/dev/tty.usbserial-120" placeholder="Путь к порту Arduino">
+                    <div class="input-group-append">
+                        <button id="directConnectBtn" class="btn btn-primary">
+                            <i class="bi bi-usb-plug"></i> Подключить напрямую
+                        </button>
+                    </div>
+                </div>
+                <small class="form-text text-muted">Укажите порт Arduino, например, /dev/tty.usbserial-120 или COM3</small>
+            </div>
+        </div>
+    </div>
+    
     <div class="card">
         <div class="card-header bg-primary text-white">
             <h4>Управление экспериментом #{{ experiment.id }}</h4>
@@ -116,13 +153,23 @@
                             <input type="number" class="form-control stage-freq" 
                                    value="{{ stage.frequency|default:'1500' }}" min="1000" max="6000" required>
                         </div>
-                        <div class="col-md-6 mb-2 d-flex align-items-end">
-                            <button class="btn btn-{% if stage.data %}outline-success{% else %}primary{% endif %} record-btn w-100"
-                                    data-stage="{{ forloop.counter }}"
-                                    {% if stage.data %}disabled{% endif %}>
-                                <i class="bi bi-{% if stage.data %}check-circle{% else %}record-circle{% endif %}"></i>
-                                {% if stage.data %}Завершен{% else %}Начать запись{% endif %}
-                            </button>
+                        <div class="col-md-6 mb-2">
+                            <div class="d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <button class="btn btn-{% if stage.data %}outline-success{% else %}primary{% endif %} record-btn w-100 me-2"
+                                            data-stage="{{ forloop.counter }}"
+                                            {% if stage.data %}disabled{% endif %}>
+                                        <i class="bi bi-{% if stage.data %}check-circle{% else %}record-circle{% endif %}"></i>
+                                        {% if stage.data %}Завершен{% else %}Начать запись{% endif %}
+                                    </button>
+                                    <div class="distance-display p-2 border rounded bg-light" style="display: none; min-width: 150px;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <small class="text-muted">Расстояние:</small>
+                                            <span class="stage-distance badge bg-info">-- см</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="stage-progress mt-2" style="display: none;">
@@ -154,10 +201,83 @@
 {% block extra_js %}
 <!-- Сначала загружаем Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // ЭТОТ БЛОК ДОЛЖЕН БЫТЬ ПЕРЕД assistant_control.js
+    window.EXPERIMENT_ID = "{{ experiment.id|escapejs }}";
+    console.log('[HTML] window.EXPERIMENT_ID установлен:', window.EXPERIMENT_ID);
+</script>
 <script src="{% static 'js/charts.js' %}"></script>
 <script src="{% static 'js/recording.js' %}"></script>
+<script src="{% static 'js/arduino.js' %}"></script>
 <script src="{% static 'js/assistant_control.js' %}"></script>
+
+<!-- Скрипт для прямого подключения к Arduino (ОСТАВЛЯЕМ КАК ЕСТЬ) -->
 <script>
-    window.EXPERIMENT_ID = "{{ experiment.id|escapejs }}";
+    document.addEventListener('DOMContentLoaded', function() {
+        // Кнопка прямого подключения к Arduino
+        const directConnectBtn = document.getElementById('directConnectBtn');
+        if (directConnectBtn) {
+            directConnectBtn.addEventListener('click', function() {
+                const portInput = document.getElementById('directPortInput');
+                const portPath = portInput ? portInput.value.trim() : '';
+                
+                if (!portPath) {
+                    alert('Укажите путь к порту Arduino');
+                    return;
+                }
+                
+                // Обновляем UI
+                directConnectBtn.disabled = true;
+                directConnectBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Подключение...';
+                
+                // Отправляем запрос на сервер
+                fetch('/api/arduino/connect/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken() // Убедитесь, что эта функция доступна или замените ее
+                    },
+                    body: JSON.stringify({ port: portPath })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    directConnectBtn.disabled = false;
+                    
+                    if (data.success) {
+                        directConnectBtn.innerHTML = '<i class="bi bi-usb-plug-fill"></i> Подключено';
+                        const statusBadge = document.getElementById('directEquipmentStatus');
+                        if (statusBadge) {
+                            statusBadge.className = 'badge badge-success';
+                            statusBadge.textContent = 'Подключено';
+                        }
+                        
+                        alert('Успешно подключено к Arduino на порту ' + portPath);
+                    } else {
+                        directConnectBtn.innerHTML = '<i class="bi bi-usb-plug"></i> Подключить напрямую';
+                        alert('Ошибка подключения: ' + (data.error || 'Неизвестная ошибка'));
+                    }
+                })
+                .catch(error => {
+                    directConnectBtn.disabled = false;
+                    directConnectBtn.innerHTML = '<i class="bi bi-usb-plug"></i> Подключить напрямую';
+                    alert('Ошибка запроса: ' + error.message);
+                });
+            });
+        }
+        
+        // Функция для получения CSRF-токена (должна быть доступна глобально или определена здесь)
+        // Если getCsrfToken из assistant_control.js, она может быть недоступна здесь сразу.
+        // Для простоты пока оставим так, но это потенциальное место для улучшения.
+        function getCsrfToken() { // Эта функция дублируется, лучше вынести в отдельный utility-скрипт
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                const [name, value] = cookie.trim().split('=');
+                if (name === 'csrftoken') {
+                    return value;
+                }
+            }
+            return '';
+        }
+    });
 </script>
 {% endblock %}

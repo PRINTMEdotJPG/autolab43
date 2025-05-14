@@ -1,0 +1,1 @@
+# arduino_api - модуль для прямого взаимодействия с Arduino через backend 
