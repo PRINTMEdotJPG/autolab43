@@ -1,32 +1,162 @@
 {% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Результаты эксперимента #{{ experiment.id }}{% endblock %}
+
 {% block content %}
-<h1>Эксперимент #{{ experiment.id }}</h1>
-<p>Лаборант: {{ experiment.assistant.full_name }}</p>
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h4>Результаты эксперимента #{{ experiment.id }}</h4>
+            <div class="d-flex justify-content-between align-items-center">
+                <span>Лаборант: {{ experiment.assistant.full_name }}</span>
+                <span class="badge bg-{% if experiment.status == 'completed' %}success{% else %}warning{% endif %}">
+                    {{ experiment.get_status_display }}
+                </span>
+            </div>
+        </div>
 
-<h2>Данные с оборудования</h2>
-<table>
-    <thead>
-        <tr>
-            <th>Время (мс)</th>
-            <th>Сигнал микрофона</th>
-            <th>Положение трубы (мм)</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for point in data_points %}
-        <tr>
-            <td>{{ point.time_ms }}</td>
-            <td>{{ point.microphone_signal }}</td>
-            <td>{{ point.tube_position }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+        <div class="card-body">
+            <!-- Основные параметры -->
+            <div class="mb-4">
+                <h5>Параметры эксперимента</h5>
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Температура:</strong> {{ experiment.temperature }}°C</p>
+                    </div>
+                </div>
+            </div>
 
-{% if not is_assistant %}
-<form method="post">
-    {% csrf_token %}
-    <button type="submit">Отправить расчеты</button>
-</form>
-{% endif %}
+            <!-- Графики этапов -->
+            <div class="mb-4">
+                <h5>Результаты измерений</h5>
+                <div class="row">
+                    {% for stage in experiment.stages %}
+                    <div class="col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6 class="card-title">Этап {{ forloop.counter }} ({{ stage.frequency }} Гц)</h6>
+                                <div class="chart-container">
+                                    <canvas id="chart-step-{{ forloop.counter }}" height="200"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Итоговый график -->
+            <div class="mb-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Итоговый график</h5>
+                        <div class="chart-container">
+                            <canvas id="finalChart" height="200"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if not is_assistant and experiment.status == 'completed' %}
+            <!-- Форма для ввода результатов студента -->
+            <div class="mt-4">
+                <h5>Ваши результаты</h5>
+                <form id="studentResultsForm" class="needs-validation" novalidate>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="speedInput" class="form-label">Скорость звука (м/с)</label>
+                            <input type="number" class="form-control" id="speedInput" 
+                                   required min="300" max="400" step="0.1">
+                            <div class="invalid-feedback">
+                                Введите значение от 300 до 400 м/с
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="gammaInput" class="form-label">Коэффициент γ</label>
+                            <input type="number" class="form-control" id="gammaInput" 
+                                   required min="1.0" max="2.0" step="0.001">
+                            <div class="invalid-feedback">
+                                Введите значение от 1.0 до 2.0
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle"></i> Отправить результаты
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+
+            {% if experiment.results %}
+            <!-- Результаты проверки -->
+            <div class="mt-4">
+                <h5>Результаты проверки</h5>
+                <div class="alert alert-{% if experiment.results.status == 'success' %}success{% else %}danger{% endif %}">
+                    <h6>{{ experiment.results.get_status_display }}</h6>
+                    <p><strong>Ваше γ:</strong> {{ experiment.results.student_gamma }}</p>
+                    <p><strong>Эталонное γ:</strong> {{ experiment.results.gamma_reference }}</p>
+                    <p><strong>Отклонение:</strong> {{ experiment.results.error_percent }}%</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/charts.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Инициализация графиков из сохраненных данных
+    {% for stage in experiment.stages %}
+        {% if stage.chart_data %}
+            renderMinimaChart({{ stage.chart_data.data|safe }}, 
+                            {{ forloop.counter }}, 
+                            {{ stage.frequency }});
+        {% endif %}
+    {% endfor %}
+
+    // Инициализация итогового графика
+    {% if experiment.visualization_data.final %}
+        renderCombinedChart({{ experiment.visualization_data.final|safe }});
+    {% endif %}
+
+    // Инициализация формы результатов
+    const form = document.getElementById('studentResultsForm');
+    if (form) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            if (!form.checkValidity()) {
+                e.stopPropagation();
+                form.classList.add('was-validated');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/experiment/{{ experiment.id }}/save-results/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({
+                        student_speed: parseFloat(document.getElementById('speedInput').value),
+                        student_gamma: parseFloat(document.getElementById('gammaInput').value)
+                    })
+                });
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    throw new Error('Ошибка сохранения результатов');
+                }
+            } catch (error) {
+                alert('Произошла ошибка: ' + error.message);
+            }
+        });
+    }
+});
+</script>
 {% endblock %}

@@ -10,6 +10,8 @@ import os
 from pydub import AudioSegment
 import asyncio
 import matplotlib.pyplot as plt
+from channels.db import database_sync_to_async
+from lab_data.models import Experiments, Results
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -36,6 +38,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
         self.experiment_steps = []
         self.current_step = 0
         self.max_steps = 3
+        self.experiment_id = None
+        self.experiment = None
         
         # Параметры поиска минимумов
         self.minima_params = {
@@ -64,13 +68,52 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         """Обработчик установки WebSocket соединения."""
+        self.experiment_id = self.scope['url_route']['kwargs']['experiment_id']
+        try:
+            self.experiment = await database_sync_to_async(Experiments.objects.select_related('user').get)(id=self.experiment_id)
+            logger.info(f"Эксперимент {self.experiment_id} загружен для пользователя {self.experiment.user.full_name}")
+
+            # Инициализация experiment_steps и current_step из БД
+            self.experiment_steps = self.experiment.stages if isinstance(self.experiment.stages, list) else []
+            # Убедимся, что experiment_steps - это список словарей нужной длины
+            if not self.experiment_steps or len(self.experiment_steps) != self.max_steps:
+                logger.warning(f"Данные этапов в БД для эксперимента {self.experiment_id} некорректны или отсутствуют. Инициализация {self.max_steps} пустыми этапами.")
+                self.experiment_steps = [{"frequency": None, "temperature": self.experiment.temperature, "status": "pending", "minima": None, "audio_samples": None} for _ in range(self.max_steps)]
+                # Если этапы были пустыми, сразу сохраняем инициализированную структуру
+                if not self.experiment.stages:
+                    self.experiment.stages = self.experiment_steps
+                    await database_sync_to_async(self.experiment.save)()
+            else:
+                # Проверим, что у каждого этапа есть необходимые ключи
+                for i in range(len(self.experiment_steps)):
+                    if not isinstance(self.experiment_steps[i], dict):
+                        self.experiment_steps[i] = {} # Замена на пустой словарь если не словарь
+                    self.experiment_steps[i].setdefault('frequency', None)
+                    self.experiment_steps[i].setdefault('temperature', self.experiment.temperature)
+                    self.experiment_steps[i].setdefault('status', 'pending')
+                    self.experiment_steps[i].setdefault('minima', None)
+                    self.experiment_steps[i].setdefault('audio_samples', None)
+
+
+            self.current_step = self.experiment.step if self.experiment.step and self.experiment.step <= self.max_steps else 1
+            
+            logger.info(f"Состояние из БД: current_step={self.current_step}, experiment_steps инициализированы ({len(self.experiment_steps)} этапов).")
+
+        except Experiments.DoesNotExist:
+            logger.error(f"Эксперимент с ID {self.experiment_id} не найден в БД.")
+            await self.close()
+            return
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке эксперимента {self.experiment_id} из БД: {str(e)}", exc_info=True)
+            await self.close()
+            return
+
         await self.accept()
         self.connected = True
         logger.info(
-            "Установлено новое WebSocket соединение\n"
-            f"  Текущее состояние: connected={self.connected}\n"
-            f"  Текущий шаг: {self.current_step}"
-        )
+            f"Установлено новое WebSocket соединение для эксперимента {self.experiment_id}"
+            f"  Текущее состояние: connected={self.connected}"
+            f"  Текущий шаг из БД: {self.current_step}")
 
     async def disconnect(self, close_code):
         """Обработчик закрытия соединения.
@@ -138,7 +181,9 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 'complete_audio': self.process_complete_audio,
                 'experiment_params': self.handle_experiment_params,
                 'final_results': self.validate_final_results,
-                'distance_data': self.handle_distance_data
+                'distance_data': self.handle_distance_data,
+                'start_recording': self.handle_start_recording,
+                'stop_recording': self.handle_stop_recording
             }
 
             handler = handlers.get(message_type, self.handle_unknown_type)
@@ -178,7 +223,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
             error_message = (
                 f"Неизвестный тип сообщения: '{message_type}'. "
                 f"Ожидается один из: 'experiment_params', 'complete_audio', "
-                "'final_results', 'distance_data'"
+                "'final_results', 'distance_data', 'start_recording', 'stop_recording'"
             )
             
             await self.send_error(error_message)
@@ -223,22 +268,19 @@ class AudioConsumer(AsyncWebsocketConsumer):
             )
 
             # Валидация параметров
-            if frequency is None or frequency <= 0:
-                logger.error(
-                    "Некорректная частота\n"
-                    f"  Полученное значение: {frequency}"
-                )
-                await self.send_error("Частота должна быть положительной")
-                return
-                
             if None in (step, frequency, temperature):
-                logger.error(
-                    "Отсутствуют обязательные параметры\n"
-                    f"  step: {step}\n"
-                    f"  frequency: {frequency}\n"
-                    f"  temperature: {temperature}"
-                )
+                logger.error(f"Отсутствуют обязательные параметры: step={step}, frequency={frequency}, temperature={temperature}")
                 await self.send_error("Требуются: step, frequency, temperature")
+                return
+
+            if not isinstance(frequency, (int, float)) or frequency <= 0:
+                logger.error(f"Некорректная частота: {frequency}")
+                await self.send_error("Частота должна быть положительным числом")
+                return
+
+            if not isinstance(temperature, (int, float)):
+                logger.error(f"Некорректная температура: {temperature}")
+                await self.send_error("Температура должна быть числом")
                 return
 
             logger.info(
@@ -246,35 +288,37 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 f"  Шаг {step}: частота={frequency} Гц, температура={temperature}°C"
             )
 
-            # Подготовка данных шага
-            step_data = {
+            step_index = step - 1
+            if not (0 <= step_index < len(self.experiment_steps)):
+                logger.error(f"Некорректный номер шага {step}. Допустимо от 1 до {len(self.experiment_steps)}")
+                await self.send_error(f"Некорректный номер шага. Доступно этапов: {len(self.experiment_steps)}")
+                return
+
+            # Обновление данных шага в self.experiment_steps
+            self.experiment_steps[step_index].update({
                 'frequency': float(frequency),
                 'temperature': float(temperature),
-                'status': 'params_received',
-                'minima': None,
-                'audio_samples': None,
-                'distance_samples': [],
-                'distance_timestamps': []
-            }
-
-            # Обновление данных эксперимента
-            if len(self.experiment_steps) < step:
-                self.experiment_steps.append(step_data)
-                logger.debug(f"Добавлен новый шаг эксперимента: {step}")
-            else:
-                self.experiment_steps[step-1].update(step_data)
-                logger.debug(f"Обновлен шаг эксперимента: {step}")
-
+                'status': 'params_received'
+            })
+            
             self.current_step = step
-            logger.info(f"Текущий шаг обновлен: {self.current_step}")
+            logger.info(f"Текущий шаг обновлен (локально): {self.current_step}")
+
+            # Обновляем модель Experiments в БД
+            self.experiment.temperature = float(temperature)
+            self.experiment.stages = self.experiment_steps
+            self.experiment.step = self.current_step
+            
+            await database_sync_to_async(self.experiment.save)()
+            logger.info(f"Параметры для шага {step} (частота, температура, текущий шаг эксперимента) сохранены в БД для эксперимента {self.experiment_id}")
 
             # Подготовка подтверждения
             confirmation = {
                 'type': 'step_confirmation',
                 'step': step,
                 'status': 'ready_for_recording',
-                'frequency': frequency,
-                'temperature': temperature
+                'frequency': float(frequency),
+                'temperature': float(temperature)
             }
             
             if not await self.send_json(confirmation):
@@ -307,32 +351,32 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 - timestamps (list): Соответствующие временные метки
         """
         try:
-            logger.info("Начало обработки данных о расстоянии")
+            logger.info("[AudioConsumer] Начало обработки сообщения 'distance_data'.")
             
             distances = data.get('distances', [])
             timestamps = data.get('timestamps', [])
             
             logger.debug(
-                "Полученные данные о расстоянии:\n"
-                f"  Количество измерений: {len(distances)}\n"
-                f"  Количество временных меток: {len(timestamps)}\n"
-                f"  Пример данных: distances[:5]={distances[:5]}, timestamps[:5]={timestamps[:5]}"
+                f"[AudioConsumer] Получены данные о расстоянии: "
+                f"Количество измерений: {len(distances)}, "
+                f"Количество временных меток: {len(timestamps)}. "
+                f"Пример данных: distances[:5]={distances[:5]}, timestamps[:5]={timestamps[:5]}"
             )
 
             if not distances or not timestamps:
                 logger.warning(
-                    "Получены пустые данные о расстоянии\n"
-                    f"  distances: {len(distances)} элементов\n"
-                    f"  timestamps: {len(timestamps)} элементов"
+                    f"[AudioConsumer] Получены пустые или неполные данные о расстоянии. "
+                    f"distances: {len(distances)} элементов, timestamps: {len(timestamps)} элементов. Данные не будут сохранены."
                 )
+                # Не сбрасываем существующие self.distance_samples, если пришли пустые данные
                 return
                 
             if len(distances) != len(timestamps):
                 logger.warning(
-                    "Несоответствие количества измерений и временных меток\n"
-                    f"  distances: {len(distances)} элементов\n"
-                    f"  timestamps: {len(timestamps)} элементов"
+                    f"[AudioConsumer] Несоответствие количества измерений и временных меток. "
+                    f"distances: {len(distances)}, timestamps: {len(timestamps)}. Данные не будут сохранены."
                 )
+                # Не сбрасываем существующие self.distance_samples
                 return
 
             # Сохранение данных
@@ -340,19 +384,17 @@ class AudioConsumer(AsyncWebsocketConsumer):
             self.distance_timestamps = timestamps
             
             logger.info(
-                "Данные о расстоянии успешно сохранены\n"
-                f"  Общее количество измерений: {len(self.distance_samples)}\n"
-                f"  Временной диапазон: {min(self.distance_timestamps):.3f}-{max(self.distance_timestamps):.3f} сек"
+                f"[AudioConsumer] Данные о расстоянии успешно сохранены в экземпляре AudioConsumer. "
+                f"Общее количество измерений: {len(self.distance_samples)}. "
+                f"Временной диапазон: {min(self.distance_timestamps):.3f}-{max(self.distance_timestamps):.3f} сек (если не пусто)"
             )
             
         except Exception as e:
             logger.error(
-                "Ошибка обработки данных о расстоянии\n"
-                f"  Тип ошибки: {type(e).__name__}\n"
-                f"  Сообщение: {str(e)}\n"
-                "  Трассировка:", exc_info=True
+                f"[AudioConsumer] Ошибка обработки данных о расстоянии: {type(e).__name__} - {str(e)}", 
+                exc_info=True
             )
-            await self.send_error("Ошибка обработки данных о расстоянии")
+            await self.send_error("Ошибка обработки данных о расстоянии на сервере")
 
 
     async def process_complete_audio(self, data):
@@ -361,11 +403,17 @@ class AudioConsumer(AsyncWebsocketConsumer):
             step = data.get('step')
             audio_data = data.get('data')
             
-            if not all([step, audio_data]):
-                logger.error("Отсутствуют данные или номер шага")
-                await self.send_error("Требуются step и data")
+            if not (step and isinstance(step, int) and 0 < step <= len(self.experiment_steps)):
+                logger.error(f"Некорректный или отсутствующий номер шага: {step}. Доступно этапов: {len(self.experiment_steps)}")
+                await self.send_error("Некорректный или отсутствующий номер шага")
+                return
+            
+            if not audio_data:
+                logger.error("Отсутствуют аудио данные (data).")
+                await self.send_error("Требуются аудио данные (data)")
                 return
 
+            step_index = step - 1
             logger.info(f"Обработка аудио для шага {step}")
             logger.debug(f"Текущие шаги эксперимента: {self.experiment_steps}")
 
@@ -373,7 +421,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 audio_bytes = base64.b64decode(audio_data)
                 logger.debug(f"Декодировано {len(audio_bytes)} байт аудио")
                 
-                samples, self.sample_rate = await self.decode_audio(audio_bytes, 'webm')
+                samples, decoded_sample_rate = await self.decode_audio(audio_bytes, data.get('format', 'webm'))
+                self.sample_rate = decoded_sample_rate
                 filtered = self.apply_butterworth_filter(samples, self.sample_rate)
                 
                 # Находим минимумы и сопоставляем с расстояниями
@@ -386,7 +435,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     return
 
                 if step <= len(self.experiment_steps):
-                    self.experiment_steps[step-1].update({
+                    self.experiment_steps[step_index].update({
                         'audio_samples': samples.tolist(),
                         'minima': minima,
                         'status': 'audio_processed',
@@ -394,12 +443,28 @@ class AudioConsumer(AsyncWebsocketConsumer):
                         'distance_timestamps': self.distance_timestamps
                     })
 
+                # Убедимся, что параметры для шага были установлены
+                current_step_params = self.experiment_steps[step_index]
+                if current_step_params.get('status') != 'params_received' and current_step_params.get('status') != 'audio_processed':
+                    # Если параметры не были установлены ранее через experiment_params, 
+                    # попробуем взять их из data, если они там есть (как fallback)
+                    fallback_frequency = data.get('frequency')
+                    fallback_temperature = data.get('temperature')
+                    if fallback_frequency and fallback_temperature :
+                        logger.warning(f"Параметры для шага {step} не были предварительно установлены, используем из сообщения complete_audio: f={fallback_frequency}, t={fallback_temperature}")
+                        current_step_params['frequency'] = float(fallback_frequency)
+                        current_step_params['temperature'] = float(fallback_temperature)
+                    else:
+                        logger.error(f"Параметры для шага {step} не были установлены, и отсутствуют в сообщении complete_audio. Этап: {current_step_params}")
+                        await self.send_error(f"Параметры для шага {step} не установлены.")
+                        return
+
                 response = {
                     'type': 'minima_data',
                     'step': int(step),
                     'minima': minima,
-                    'frequency': float(self.experiment_steps[step-1]['frequency']),
-                    'temperature': float(self.experiment_steps[step-1]['temperature'])
+                    'frequency': float(self.experiment_steps[step_index]['frequency']),
+                    'temperature': float(self.experiment_steps[step_index]['temperature'])
                 }
                 
                 if not await self.send_json(response):
@@ -464,68 +529,91 @@ class AudioConsumer(AsyncWebsocketConsumer):
         try:
             logger.info("Расчет финальных результатов с учетом расстояний...")
             
-            if not self.experiment_steps:
-                logger.error("Нет данных эксперимента")
-                await self.send_error("Отсутствуют данные эксперимента")
-                return
-
-            results = []
-            for idx, step in enumerate(self.experiment_steps, 1):
-                if not step.get('minima'):
+            results_summary = [] 
+            for idx, step_data in enumerate(self.experiment_steps, 1):
+                if not step_data.get('minima'):
                     logger.warning(f"Нет данных минимумов для шага {idx}")
                     continue
                 
-                # Используем расстояния для более точного расчета
-                minima_with_distances = step['minima']
+                minima_with_distances = step_data['minima']
                 if not minima_with_distances or len(minima_with_distances) < 2:
+                    logger.warning(f"Недостаточно минимумов с расстояниями для шага {idx}")
                     continue
                 
-                # Получаем список расстояний и времен для минимумов
                 distances = [m['distance'] for m in minima_with_distances]
                 times = [m['time'] for m in minima_with_distances]
                 
-                # Рассчитываем скорость звука с учетом изменений расстояния
                 delta_distances = np.diff(distances)
                 delta_times = np.diff(times)
                 
-                # Средняя скорость изменения расстояния между минимумами
-                avg_speed = np.mean(np.abs(delta_distances) / delta_times) if np.any(delta_times) else 0
+                avg_speed_movement = np.mean(np.abs(delta_distances) / delta_times) if np.any(delta_times) else 0
                 
-                # Основной расчет скорости звука
-                speed = self.calculate_speed(step['minima'], step['frequency'])
+                frequency = step_data.get('frequency')
+                if not frequency:
+                    logger.warning(f"Отсутствует частота для шага {idx}, пропускаем расчет скорости/гаммы.")
+                    continue
+
+                raw_speed = self.calculate_speed(minima_with_distances, frequency)
+                corrected_speed = raw_speed + avg_speed_movement 
+                gamma = self.calculate_gamma(corrected_speed, step_data.get('temperature', 20.0))
                 
-                # Корректируем скорость с учетом движения датчика
-                corrected_speed = speed + avg_speed
-                
-                gamma = self.calculate_gamma(corrected_speed, step['temperature'])
-                
-                step.update({
+                step_data.update({
                     'system_speed': corrected_speed,
                     'system_gamma': gamma,
-                    'raw_speed': speed,
-                    'movement_speed': avg_speed
+                    'raw_speed': raw_speed,
+                    'movement_speed': avg_speed_movement
                 })
                 
-                results.append({
+                results_summary.append({
                     'step': idx,
                     'speed': round(corrected_speed, 4),
                     'gamma': round(gamma, 4),
-                    'raw_speed': round(speed, 4),
-                    'movement_speed': round(avg_speed, 4)
+                    'raw_speed': round(raw_speed, 4),
+                    'movement_speed': round(avg_speed_movement, 4)
                 })
 
-            response = {
-                'type': 'experiment_complete',
-                'message': 'Эксперимент успешно завершен',
-                'steps': results
+            if not results_summary:
+                logger.error("Не удалось рассчитать результаты ни для одного шага.")
+                await self.send_error("Не удалось рассчитать финальные результаты.")
+                return
+
+            self.experiment.status = 'completed' # Статус основного эксперимента
+            self.experiment.stages = self.experiment_steps
+            await database_sync_to_async(self.experiment.save)()
+            logger.info(f"Эксперимент {self.experiment.id} помечен как 'completed' в БД, результаты этапов обновлены.")
+
+            avg_system_gamma = np.mean([s.get('system_gamma') for s in self.experiment_steps if s.get('system_gamma') is not None])
+            if np.isnan(avg_system_gamma):
+                avg_system_gamma = 0.0
+
+            # Создаем или обновляем запись в Results со статусом 'pending_student_input'
+            # Явно устанавливаем None для полей студента, чтобы очистить их, если они были заполнены ранее
+            # и чтобы соответствовать null=True в модели, если БД требует явного None, а не отсутствия ключа.
+            results_defaults = {
+                'detailed_results': self.experiment_steps, 
+                'status': 'pending_student_input', 
+                'gamma_calculated': float(avg_system_gamma), 
+                'student_gamma': None, 
+                'student_speed': None, 
+                'error_percent': None  
             }
-            
-            if not await self.send_json(response):
-                logger.error("Не удалось отправить финальные результаты")
+            await database_sync_to_async(Results.objects.update_or_create)(
+                experiment=self.experiment,
+                defaults=results_defaults
+            )
+            logger.info(f"Запись в Results для эксперимента {self.experiment.id} создана/обновлена со статусом 'pending_student_input'.")
+
+            final_response_message = {
+                'type': 'experiment_complete',
+                'message': 'Эксперимент успешно завершен лаборантом и данные сохранены. Ожидается ввод от студента.',
+                'steps': results_summary 
+            }
+            if not await self.send_json(final_response_message):
+                logger.error("Не удалось отправить финальные результаты (после сохранения в БД)")
 
         except Exception as e:
-            logger.error(f"Ошибка расчета результатов: {str(e)}", exc_info=True)
-            await self.send_error("Ошибка расчета финальных результатов")
+            logger.error(f"Ошибка расчета финальных результатов: {str(e)}", exc_info=True)
+            await self.send_error(f"Ошибка расчета финальных результатов: {str(e)}")
 
     async def validate_final_results(self, data):
         """Валидация результатов, введенных пользователем.
@@ -907,27 +995,73 @@ class AudioConsumer(AsyncWebsocketConsumer):
             self.connected = False
             return False
 
-    async def send_error(self, message):
-        """Отправка сообщения об ошибке клиенту.
+    async def handle_start_recording(self, data):
+        """Обработчик начала записи.
         
         Args:
-            message (str): Текст сообщения об ошибке
+            data (dict): Входящее сообщение с параметрами записи
         """
-        error_data = {
-            'type': 'error',
-            'message': message,
-            'step': self.current_step,
-            'details': f"Current steps: {len(self.experiment_steps)}"
-        }
+        try:
+            step = data.get('step')
+            if not step or not isinstance(step, int):
+                await self.send_error("Не указан или некорректный номер шага")
+                return
+                
+            logger.info(
+                "Начало записи\n"
+                f"  Шаг: {step}\n"
+                f"  Текущий шаг: {self.current_step}"
+            )
+            
+            # Отправляем подтверждение начала записи
+            await self.send_json({
+                'type': 'recording_started',
+                'step': step,
+                'status': 'recording'
+            })
+            
+        except Exception as e:
+            logger.error(
+                "Ошибка при начале записи\n"
+                f"  Тип ошибки: {type(e).__name__}\n"
+                f"  Сообщение: {str(e)}\n"
+                "  Трассировка:", exc_info=True
+            )
+            await self.send_error(f"Ошибка начала записи: {str(e)}")
+
+    async def handle_stop_recording(self, data):
+        """Обработчик остановки записи.
         
-        logger.warning(
-            "Подготовка сообщения об ошибке\n"
-            f"  Текст ошибки: {message}\n"
-            f"  Текущий шаг: {self.current_step}"
-        )
-        
-        await self.send_json(error_data)
-        logger.error(f"Отправлена ошибка клиенту: {message}")
+        Args:
+            data (dict): Входящее сообщение с параметрами записи
+        """
+        try:
+            step = data.get('step')
+            if not step or not isinstance(step, int):
+                await self.send_error("Не указан или некорректный номер шага")
+                return
+                
+            logger.info(
+                "Остановка записи\n"
+                f"  Шаг: {step}\n"
+                f"  Текущий шаг: {self.current_step}"
+            )
+            
+            # Отправляем подтверждение остановки записи
+            await self.send_json({
+                'type': 'recording_stopped',
+                'step': step,
+                'status': 'stopped'
+            })
+            
+        except Exception as e:
+            logger.error(
+                "Ошибка при остановке записи\n"
+                f"  Тип ошибки: {type(e).__name__}\n"
+                f"  Сообщение: {str(e)}\n"
+                "  Трассировка:", exc_info=True
+            )
+            await self.send_error(f"Ошибка остановки записи: {str(e)}")
 
     async def test_audio_processing(self):
         """Тестовая обработка сгенерированного аудиосигнала.

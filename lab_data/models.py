@@ -313,26 +313,29 @@ class Results(models.Model):
     """Модель для хранения результатов экспериментов."""
 
     STATUS_CHOICES = [
-        ('success', 'Успешно'),
-        ('fail', 'Неудача'),
-        ('pending', 'Ожидает проверки'),
+        ('success', 'Успешно'), # Студент отправил, ошибка в пределах нормы
+        ('fail', 'Неудача'),    # Студент отправил, ошибка большая
+        ('pending_student_input', 'Ожидает ввода студента'), # Лаборант завершил, ждем студента
+        ('completed_by_assistant', 'Завершен лаборантом'), # Промежуточный статус, если нужен до pending_student_input
+        ('final_completed', 'Полностью завершен') # Все данные есть, включая студенческие
     ]
 
     experiment = models.OneToOneField(Experiments, on_delete=models.CASCADE, primary_key=True)
-    gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ", default=0)
+    gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ (система)", default=0.0) # Переименовал для ясности
     gamma_reference = models.FloatField(verbose_name="Эталонное γ", default=1.4)
     student_gamma = models.FloatField(verbose_name="Студенческое γ", null=True, blank=True)
-    error_percent = models.FloatField(verbose_name="Отклонение (%)", null=True, blank=True)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
-    visualization_data = models.JSONField(default=dict)
-    detailed_results = models.JSONField(default=list)
+    student_speed = models.FloatField(verbose_name="Студенческая скорость звука (м/с)", null=True, blank=True) # Добавим поле
+    error_percent = models.FloatField(verbose_name="Отклонение γ студента от эталона (%)", null=True, blank=True, help_text="Процент ошибки, может быть NULL")
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending_student_input')
+    visualization_data = models.JSONField(default=dict) # Может хранить данные для графиков студента, если они отличаются
+    detailed_results = models.JSONField(default=list) # Данные по этапам от консумера
 
     class Meta:
         verbose_name = "Результат"
         verbose_name_plural = "Результаты"
 
     def __str__(self) -> str:
-        return f"Результат эксперимента #{self.experiment.id}"
+        return f"Результат эксперимента #{self.experiment.id} ({self.get_status_display()})"
 
 
 class Protocols(models.Model):

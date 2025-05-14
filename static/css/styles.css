@@ -1,4 +1,20 @@
-/* Анимация иконки загрузки */
+/* Стили для контейнера уведомлений */
+#alertContainer {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    min-width: 300px;
+    max-width: 500px;
+}
+
+#alertContainer .alert {
+    margin-bottom: 10px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    transition: opacity 0.15s linear;
+}
+
+/* Анимация для спиннера */
 .spin {
     animation: spin 1s linear infinite;
 }
@@ -14,5 +30,47 @@
 }
 
 .stage-card:hover {
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.stage-card .progress {
+    height: 5px;
+    margin-top: 10px;
+}
+
+/* Стили для кнопок */
+.btn {
+    transition: all 0.2s ease;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+}
+
+.btn:active {
+    transform: translateY(1px);
+}
+
+/* Стили для графиков */
+.stage-chart-container {
+    margin-top: 20px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+/* Стили для полей ввода */
+.form-control:focus {
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,0.25);
+    border-color: #80bdff;
+}
+
+/* Стили для индикатора прогресса */
+.stage-progress {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.stage-progress.show {
+    opacity: 1;
 }

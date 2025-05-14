@@ -19,7 +19,7 @@ import json
 import logging
 import os
 from config import config
-
+from django.forms.models import model_to_dict
 
 from .models import User, Experiments, EquipmentData, Results
 from .imitate_module.sensors_simulator import ExperimentSimulator
@@ -66,17 +66,56 @@ def home_view(request) -> HttpResponse:
     Returns:
         HttpResponse: Отрендеренный шаблон home.html с контекстом
     """
-    logger.info(f"User {request.user.email} accessed home page")
-    context = {}
+    logger.info(f"User {request.user.email} (Role: {request.user.role}) accessed home page.")
+    context: Dict[str, Any] = {
+        'user': request.user,
+        'full_name': request.user.full_name,
+        'role': request.user.get_role_display(),
+    }
 
     if request.user.role == 'student':
-        logger.debug("Building context for student view")
-        context.update({
-            'user': request.user,
-            'full_name': request.user.full_name,
-            'group_name': request.user.group_name,
-            'role': request.user.get_role_display(),
-        })
+        logger.info(f"Building context for student: {request.user.email}")
+        try:
+            experiments_query = Experiments.objects.filter(
+                user=request.user
+            ).select_related('assistant', 'results').order_by('-created_at')
+            
+            logger.info(f"Found {experiments_query.count()} raw experiments for student {request.user.email}.")
+
+            student_experiments_data = []
+            for exp in experiments_query:
+                student_facing_status = 'Неизвестно'
+                results_status = exp.results.status if hasattr(exp, 'results') and exp.results else None
+                exp_status_from_model = exp.status
+
+                if results_status == 'pending_student_input':
+                    student_facing_status = 'в процессе выполнения'
+                elif results_status in ['success', 'fail', 'final_completed']:
+                    student_facing_status = 'Завершен'
+                elif exp_status_from_model == 'completed':
+                    student_facing_status = 'Обрабатывается системой (ожидает формы ввода)'
+                else:
+                    student_facing_status = exp.get_status_display()
+
+                student_experiments_data.append({
+                    'id': exp.id,
+                    'created_at': exp.created_at, # Оставляем datetime для шаблонизатора
+                    'status_for_student': student_facing_status,
+                    'raw_experiment_status': exp.status, # Оригинальный статус из Experiments
+                    'results_status': results_status, # Статус из Results
+                    'assistant_name': exp.assistant.full_name if exp.assistant else 'Нет данных',
+                    'get_status_badge': exp.get_status_display().lower() # Пример для badge, нужно будет создать такой метод в модели или логику в шаблоне
+                })
+            
+            context['student_experiments_list'] = student_experiments_data
+            logger.info(f"Prepared {len(student_experiments_data)} experiments for student {request.user.email} to display. Data: {student_experiments_data}")
+
+        except Exception as e:
+            logger.error(f"Error fetching experiments for student {request.user.email} in home_view: {str(e)}", exc_info=True)
+            context['student_experiments_list'] = []
+            context['student_experiments_error'] = "Не удалось загрузить список экспериментов."
+
+
     elif request.user.role == 'teacher':
         logger.debug("Building context for teacher view")
         groups_with_students = []
@@ -99,6 +138,24 @@ def home_view(request) -> HttpResponse:
             'groups_with_students': groups_with_students,
             'is_teacher': True,
         })
+
+    elif request.user.role == 'assistant':
+        logger.info(f"Building context for assistant: {request.user.email}")
+        # Логика для лаборанта остается здесь, если она отличается от общей home_view
+        # Если home_view для лаборанта - это assistant_dashboard, то этот блок может не нужен
+        # или нужно решить, какая view является основной для home лаборанта.
+        # Судя по urls.py, assistant_dashboard это отдельный view.
+        # Этот блок home_view для assistant, возможно, избыточен или должен быть другим.
+        # Пока оставим как есть, предполагая, что есть общая home_view.
+        
+        # Пример: если лаборанту тоже нужен список его активных экспериментов на общей home
+        context['active_experiments_for_assistant'] = Experiments.objects.filter(
+            assistant=request.user,
+            status__in=['preparing', 'stage_1', 'stage_2', 'stage_3']
+        ).select_related('user').order_by('-created_at')
+        context['students_for_assistant'] = User.objects.filter(role='student').order_by('full_name')
+        logger.info(f"Found {context['active_experiments_for_assistant'].count()} active experiments for assistant {request.user.email}")
+
 
     return render(request, 'home.html', context)
 
@@ -329,44 +386,70 @@ def submit_results(request):
 @login_required
 @require_http_methods(["POST"])
 def save_experiment_results(request, experiment_id):
+    """Сохранение результатов, введенных студентом."""
     try:
-        experiment = Experiments.objects.get(id=experiment_id, user=request.user)
+        experiment = get_object_or_404(Experiments, id=experiment_id, user=request.user)
+        results_entry, created = Results.objects.get_or_create(experiment=experiment)
+
         data = json.loads(request.body)
         
-        # Проверка обязательных полей
-        final_results = data.get('final_results', {})
-        if not all(k in final_results for k in ['system_speed', 'system_gamma', 'student_speed', 'student_gamma']):
+        student_speed_str = data.get('student_speed')
+        student_gamma_str = data.get('student_gamma')
+
+        if student_speed_str is None or student_gamma_str is None:
             return JsonResponse({
                 'status': 'error',
-                'message': 'Missing required fields in final_results'
+                'message': 'Отсутствуют обязательные поля: student_speed и student_gamma'
+            }, status=400)
+        
+        try:
+            student_speed = float(student_speed_str)
+            student_gamma = float(student_gamma_str)
+        except ValueError:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Скорость и гамма должны быть числами.'
             }, status=400)
 
-        # Обновляем эксперимент
-        experiment.student_speed = float(final_results['student_speed'])
-        experiment.student_gamma = float(final_results['student_gamma'])
-        experiment.system_gamma = float(final_results['system_gamma'])
-        experiment.error_percent = float(final_results.get('error_percent', 0))
-        experiment.status = 'completed'
-        experiment.save()
+        results_entry.student_speed = student_speed
+        results_entry.student_gamma = student_gamma
 
-        # Обновляем или создаем результаты
-        Results.objects.update_or_create(
-            experiment=experiment,
-            defaults={
-                'gamma_calculated': float(final_results['system_gamma']),
-                'gamma_reference': 1.4,
-                'student_gamma': float(final_results['student_gamma']),
-                'error_percent': float(final_results.get('error_percent', 0)),
-                'status': 'completed',
-                'detailed_results': data.get('steps', []),
-                'visualization_data': data.get('charts_data', {})
-            }
-        )
+        # Расчет погрешности. Сравниваем student_gamma с gamma_reference (эталонное значение 1.4)
+        # или с results_entry.gamma_calculated (системно рассчитанное)
+        # В данном случае, по названию поля error_percent, логичнее сравнивать с эталоном.
+        if results_entry.gamma_reference != 0:
+            error = abs((student_gamma - results_entry.gamma_reference) / results_entry.gamma_reference) * 100
+            results_entry.error_percent = round(error, 2)
+        else:
+            results_entry.error_percent = None # Или 0.0, если эталон 0
+
+        # Определение статуса на основе погрешности
+        # Вам нужно определить порог, например, 5% или 10%
+        ACCEPTABLE_ERROR_PERCENT = 10.0 
+        if results_entry.error_percent is not None and results_entry.error_percent <= ACCEPTABLE_ERROR_PERCENT:
+            results_entry.status = 'success' # Успешно, в пределах нормы
+        else:
+            results_entry.status = 'fail' # Неудача, большая погрешность
         
-        return JsonResponse({'status': 'success'})
+        # Если эксперимент был в статусе 'pending_student_input', можно перевести его в 'final_completed'
+        # или использовать 'success'/'fail' как финальные.
+        # Для примера, используем 'success'/'fail' как финальные для Results.
+        # Статус самого Experiments ('completed') остается.
+
+        results_entry.save()
+        
+        logger.info(f"Студент {request.user.email} сохранил результаты для эксперимента {experiment_id}. ")
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Результаты успешно сохранены!',
+            'results_status': results_entry.status,
+            'error_percent': results_entry.error_percent
+        })
     
+    except Experiments.DoesNotExist:
+        return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден'}, status=404)
     except Exception as e:
-        logger.error(f"Error saving results: {str(e)}")
+        logger.error(f"Ошибка при сохранении результатов студента для эксперимента {experiment_id}: {str(e)}", exc_info=True)
         return JsonResponse({
             'status': 'error',
             'message': str(e)
@@ -595,15 +678,49 @@ class AssistantLoginView(View):
 
 @login_required
 def get_student_experiments(request):
+    logger.info(f"Attempting to get experiments for student: {request.user.email} (ID: {request.user.id})")
     if request.user.role != 'student':
+        logger.warning(f"Access denied for user {request.user.email} to get_student_experiments (not a student).")
         return JsonResponse({'status': 'error', 'message': 'Доступ запрещен'}, status=403)
     
-    experiments = Experiments.objects.filter(user=request.user).values(
-        'id', 'created_at', 'status', 'assistant__full_name'
-    )
-    return JsonResponse({'experiments': list(experiments)})
+    try:
+        # Запрашиваем эксперименты и связанные с ними результаты
+        experiments_with_results = Experiments.objects.filter(
+            user=request.user  # ИСПРАВЛЕНО ЗДЕСЬ
+        ).select_related('assistant', 'results').order_by('-created_at')
+        
+        logger.info(f"Found {experiments_with_results.count()} experiments for student {request.user.email} before processing statuses.")
 
+        experiments_data = []
+        for exp in experiments_with_results:
+            student_facing_status = 'Неизвестно'
+            # Пытаемся получить статус из связанной записи Results
+            results_status = exp.results.status if hasattr(exp, 'results') and exp.results else None
+            exp_status_from_model = exp.status # Статус из модели Experiments
 
+            if results_status == 'pending_student_input':
+                student_facing_status = 'в процессе выполнения' 
+            elif results_status == 'success' or results_status == 'fail' or results_status == 'final_completed':
+                student_facing_status = 'Завершен' 
+            elif exp_status_from_model == 'completed': 
+                student_facing_status = 'Обрабатывается системой (ожидает формы ввода)'
+            else:
+                student_facing_status = exp.get_status_display()
+
+            experiments_data.append({
+                'id': exp.id,
+                'created_at': exp.created_at.strftime('%Y-%m-%d %H:%M:%S') if exp.created_at else None,
+                'status_for_student': student_facing_status,
+                'raw_experiment_status': exp.status,
+                'results_status': results_status,
+                'assistant_name': exp.assistant.full_name if exp.assistant else 'Нет данных'
+            })
+        
+        logger.info(f"Returning {len(experiments_data)} experiments for student {request.user.email}. Data: {experiments_data}")
+        return JsonResponse({'experiments': experiments_data, 'status': 'success'})
+    except Exception as e:
+        logger.error(f"Error in get_student_experiments for user {request.user.email}: {str(e)}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': 'Внутренняя ошибка сервера при получении экспериментов'}, status=500)
 
 @login_required
 @require_http_methods(["POST"])
@@ -673,21 +790,6 @@ def upload_experiment_data(request, experiment_id):
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
 
 @login_required
-def home_view(request):
-    context = {}
-    
-    if request.user.role == 'assistant':
-        logger.info(f"Assistant {request.user.email} accessed home page")
-        context['active_experiments'] = Experiments.objects.filter(
-            assistant=request.user,
-            status__in=['preparing', 'stage_1', 'stage_2', 'stage_3']
-        ).select_related('user')
-        context['students'] = User.objects.filter(role='student').order_by('full_name')
-        logger.info(f"Found {len(context['active_experiments'])} active experiments")
-
-    return render(request, 'home.html', context)
-
-@login_required
 def experiment_control_view(request, experiment_id):
     """Контрольная панель эксперимента для лаборанта"""
     experiment = get_object_or_404(Experiments, id=experiment_id)
@@ -722,6 +824,9 @@ def save_experiment_params(request, experiment_id):
         for i, freq in enumerate(data['frequencies']):
             if i < len(experiment.stages):
                 experiment.stages[i]['frequency'] = float(freq) if freq else None
+                # Добавляем данные графиков, если они есть
+                if 'charts_data' in data and f'step_{i+1}' in data['charts_data']:
+                    experiment.stages[i]['chart_data'] = data['charts_data'][f'step_{i+1}']
         
         experiment.save()
         return JsonResponse({'status': 'success'})
@@ -738,9 +843,129 @@ def complete_experiment(request, experiment_id):
         if request.user != experiment.assistant:
             return JsonResponse({'status': 'error', 'message': 'Нет прав'}, status=403)
 
+        data = json.loads(request.body)
+        
+        # Обновляем данные эксперимента
+        experiment.temperature = float(data['temperature'])
         experiment.status = 'completed'
+        
+        # Обновляем данные этапов
+        for step_data in data['steps']:
+            step_index = step_data['step'] - 1
+            if step_index < len(experiment.stages):
+                experiment.stages[step_index].update({
+                    'frequency': step_data['frequency'],
+                    'data': step_data['data'],
+                    'labels': step_data['labels']
+                })
+        
+        # Сохраняем итоговые данные графиков
+        if 'charts_data' in data:
+            experiment.visualization_data = data['charts_data']
+        
         experiment.save()
+
+        # Создаем или обновляем запись результатов
+        Results.objects.update_or_create(
+            experiment=experiment,
+            defaults={
+                'visualization_data': data.get('charts_data', {}),
+                'detailed_results': data.get('steps', []),
+                'status': 'pending'  # Ожидает ввода данных от студента
+            }
+        )
+
         return JsonResponse({'status': 'success'})
 
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+@login_required
+def get_experiment_details_for_student(request, experiment_id):
+    """API для получения студентом детальных данных эксперимента для расчетов."""
+    if request.user.role != 'student':
+        logger.warning(f"User {request.user.email} (not a student) tried to access student experiment data for {experiment_id}")
+        return JsonResponse({'status': 'error', 'message': 'Доступ запрещен'}, status=403)
+
+    try:
+        experiment = get_object_or_404(Experiments, id=experiment_id, user=request.user)
+        results_entry = Results.objects.filter(experiment=experiment).first()
+
+        if not experiment:
+            logger.warning(f"Student {request.user.email} tried to access non-existent or non-owned experiment {experiment_id}")
+            return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден или у вас нет к нему доступа'}, status=404)
+
+        # Собираем данные для студента
+        # Мы передаем данные из experiment.stages, так как они содержат minima, frequency и т.д., 
+        # рассчитанные и сохраненные консумером.
+        stages_data_for_student = []
+        if isinstance(experiment.stages, list):
+            for stage_index, stage in enumerate(experiment.stages):
+                if isinstance(stage, dict): # Убедимся, что это словарь
+                    stages_data_for_student.append({
+                        'stage_number': stage_index + 1,
+                        'frequency': stage.get('frequency'),
+                        'temperature': stage.get('temperature', experiment.temperature), # Температура этапа или общая
+                        'minima': stage.get('minima', []), # Список словарей с 'position', 'amplitude', 'time', 'distance'
+                        # Можно добавить и другие полезные данные, если они есть в stage
+                    })
+                else:
+                    logger.warning(f"Этап {stage_index+1} в эксперименте {experiment.id} не является словарем: {stage}")
+        else:
+            logger.warning(f"experiment.stages для эксперимента {experiment.id} не является списком: {experiment.stages}")
+
+        # Данные из Results, если они есть и нужны (например, системные расчеты для сравнения ПОСЛЕ ввода студента)
+        # На данном этапе (до ввода студентом) они могут быть не нужны, или нужны только для справки.
+        # results_data = model_to_dict(results_entry) if results_entry else None 
+
+        response_data = {
+            'status': 'success',
+            'experiment_id': experiment.id,
+            'created_at': experiment.created_at.strftime('%Y-%m-%d %H:%M:%S') if experiment.created_at else None,
+            'experiment_status': experiment.status,
+            'global_temperature': experiment.temperature, # Общая температура, если нужна
+            'stages': stages_data_for_student,
+            # 'system_results': results_data # Раскомментировать, если нужно передавать данные из Results
+        }
+
+        logger.info(f"Student {request.user.email} accessed data for experiment {experiment_id}")
+        return JsonResponse(response_data)
+
+    except Http404:
+        logger.warning(f"Student {request.user.email} - Experiment {experiment_id} not found or access denied (Http404).")
+        return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден или у вас нет к нему доступа'}, status=404)
+    except Exception as e:
+        logger.error(f"Error fetching experiment details for student {request.user.email}, experiment {experiment_id}: {str(e)}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': f'Внутренняя ошибка сервера: {str(e)}'}, status=500)
+
+@login_required
+def student_experiment_detail_view(request, experiment_id):
+    logger.info(f"Student {request.user.email} (ID: {request.user.id}) attempting to view experiment detail for ID: {experiment_id}")
+    try:
+        # Сначала получаем эксперимент только по ID
+        experiment = get_object_or_404(Experiments, id=experiment_id)
+        logger.info(f"Experiment {experiment_id} found. Owner User ID in DB: {experiment.user_id}. Current request.user ID: {request.user.id}")
+
+        # Теперь проверяем, принадлежит ли он текущему пользователю
+        if experiment.user != request.user:
+            logger.warning(f"Access Denied: Experiment {experiment_id} (owner: {experiment.user_id}) does not belong to student {request.user.email} (ID: {request.user.id}).")
+            # Выбрасываем Http404, если эксперимент не принадлежит пользователю
+            # Это стандартное поведение, которое должно было быть и раньше, но теперь мы логируем причину точнее.
+            raise Http404("Эксперимент не найден или у вас нет к нему доступа.")
+
+        logger.info(f"Experiment {experiment_id} confirmed to belong to student {request.user.email}.")
+        return render(request, 'lab_data/student_experiment_page.html', {'experiment_id': experiment_id})
+    
+    except Http404 as e:
+        # Этот блок теперь будет ловить как Http404 от get_object_or_404(Experiments, id=experiment_id)
+        # так и Http404, который мы выбрасываем при проверке experiment.user != request.user
+        logger.warning(f"Http404 in student_experiment_detail_view for experiment {experiment_id}, user {request.user.email}: {str(e)}")
+        # Перевыбрасываем оригинальную ошибку Http404 или кастомную, если необходимо
+        # В данном случае, сообщение из raise выше будет более информативным, если проблема в доступе.
+        # Если get_object_or_404 не нашел по ID, то будет его стандартное сообщение.
+        raise # Перевыбрасываем оригинальную Http404
+
+    except Exception as e:
+        logger.error(f"Unexpected error in student_experiment_detail_view for user {request.user.email}, experiment {experiment_id}: {str(e)}", exc_info=True)
+        # Для других непредвиденных ошибок можно вернуть более общее сообщение
+        raise Http404("Произошла неожиданная ошибка при загрузке страницы эксперимента.")

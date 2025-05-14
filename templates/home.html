@@ -19,7 +19,7 @@
             margin-bottom: 20px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             border-radius: 8px;
-            overflow: hidden;
+            /* overflow: hidden; */
         }
         .experiment-card .card-header {
             font-weight: 600;
@@ -67,42 +67,63 @@
                         <i class="bi bi-collection"></i> Мои эксперименты
                     </div>
                     <div class="card-body">
-                        {% if experiments %}
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Дата</th>
-                                    <th>Статус</th>
-                                    <th>Лаборант</th>
-                                    <th>Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for exp in experiments %}
-                                <tr>
-                                    <td>#{{ exp.id }}</td>
-                                    <td>{{ exp.created_at|date:"d.m.Y H:i" }}</td>
-                                    <td>
-                                        <span class="badge bg-{{ exp.get_status_badge }}">
-                                            {{ exp.get_status_display }}
-                                        </span>
-                                    </td>
-                                    <td>{{ exp.assistant.full_name }}</td>
-                                    <td>
-                                        <a href="{% url 'experiment_results' exp.id %}" 
-                                           class="btn btn-sm btn-primary">
-                                            <i class="bi bi-eye"></i> Просмотреть
-                                        </a>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                        {% else %}
-                        <div class="alert alert-info">
-                            <i class="bi bi-info-circle"></i> Нет доступных экспериментов. Ожидайте данные от лаборанта.
+                        {% if student_experiments_error %}
+                            <div class="alert alert-danger">
+                                <i class="bi bi-exclamation-triangle-fill"></i> {{ student_experiments_error }}
+                            </div>
+                        {% endif %}
+
+                        {% if student_experiments_list %}
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="student-experiments-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Дата</th>
+                                        <th>Статус</th>
+                                        <th>Лаборант</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for exp in student_experiments_list %}
+                                    <tr>
+                                        <td>#{{ exp.id }}</td>
+                                        <td>{{ exp.created_at|date:"d.m.Y H:i" }}</td>
+                                        <td>
+                                            {% with status=exp.status_for_student %}
+                                                {% if "в процессе выполнения" in status %}
+                                                    <span class="badge bg-primary">{{ status }}</span>
+                                                {% elif "Завершен" in status %}
+                                                    <span class="badge bg-success">{{ status }}</span>
+                                                {% elif "Обрабатывается системой" in status %}
+                                                    <span class="badge bg-secondary">{{ status }}</span>
+                                                {% elif "Подготовка" in status %}
+                                                    <span class="badge bg-warning text-dark">{{ status }}</span>
+                                                {% else %}
+                                                    <span class="badge bg-light text-dark">{{ status }}</span>
+                                                {% endif %}
+                                            {% endwith %}
+                                        </td>
+                                        <td>{{ exp.assistant_name }}</td>
+                                        <td>
+                                            {# Используем новый URL для страницы деталей эксперимента студента #}
+                                            <a href="{% url 'student_experiment_detail_view' exp.id %}" 
+                                               class="btn btn-sm btn-primary">
+                                                <i class="bi bi-eye"></i> Просмотреть
+                                            </a>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
                         </div>
+                        {% else %}
+                            {% if not student_experiments_error %} {# Показываем это сообщение, только если не было ошибки загрузки #}
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle"></i> Нет доступных экспериментов. Ожидайте данные от лаборанта.
+                            </div>
+                            {% endif %}
                         {% endif %}
                     </div>
                 </div>
@@ -122,6 +143,49 @@
                 </div>
             </div>
         </div>
+        {{ student_experiments_list|json_script:"student-experiments-data" }}
+        {{ student_experiments_error|json_script:"student-experiments-error-data" }}
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log("[STUDENT_HOME] DOMContentLoaded event fired.");
+                const experimentsTable = document.getElementById('student-experiments-table');
+                
+                let experimentsList = null;
+                try {
+                    const experimentsDataElement = document.getElementById('student-experiments-data');
+                    if (experimentsDataElement) {
+                        experimentsList = JSON.parse(experimentsDataElement.textContent);
+                    }
+                } catch (e) {
+                    console.error("[STUDENT_HOME] Error parsing student_experiments_list JSON:", e);
+                }
+
+                let experimentsError = null;
+                try {
+                    const experimentsErrorElement = document.getElementById('student-experiments-error-data');
+                    if (experimentsErrorElement) {
+                        experimentsError = JSON.parse(experimentsErrorElement.textContent);
+                    }
+                } catch (e) {
+                     console.error("[STUDENT_HOME] Error parsing student_experiments_error JSON:", e);
+                }
+                
+                if (experimentsError) {
+                    console.error("[STUDENT_HOME] Error loading experiments from backend: ", experimentsError);
+                } else if (experimentsList && experimentsList.length > 0) {
+                    console.log(`[STUDENT_HOME] Displaying ${experimentsList.length} experiments:`, experimentsList);
+                } else {
+                    console.log("[STUDENT_HOME] No experiments data received, list is empty, or error parsing data.");
+                }
+
+                if (experimentsTable) {
+                    const rowCount = experimentsTable.getElementsByTagName('tbody')[0].rows.length;
+                    console.log(`[STUDENT_HOME] Student experiments table rendered with ${rowCount} data rows.`);
+                } else {
+                    console.log("[STUDENT_HOME] Student experiments table not found in DOM (this is expected if no experiments or error).");
+                }
+            });
+        </script>
 
     {% elif user.role == 'assistant' %}
         <!-- ЛАБОРАНТ: Управление экспериментами -->

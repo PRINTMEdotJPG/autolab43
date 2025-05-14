@@ -29,5 +29,8 @@ path('assistant/start-experiment/', views.assistant_start_experiment, name='star
  path('experiment/control/<int:experiment_id>/', views.experiment_control_view, name='experiment_control'),
     path('api/experiment/<int:experiment_id>/save-params/', views.save_experiment_params, name='save_experiment_params'),
     path('api/experiment/<int:experiment_id>/complete/', views.complete_experiment, name='complete_experiment'),
-
+    path('api/experiment/<int:experiment_id>/save-results/', views.save_experiment_results, name='save_experiment_results'),
+    path('api/experiment/<int:experiment_id>/student-data/', views.get_experiment_details_for_student, name='get_experiment_details_for_student'),
+    path('api/get_experiment_details_for_student/<int:experiment_id>/', views.get_experiment_details_for_student, name='get_experiment_details_for_student'),
+    path('experiment/<int:experiment_id>/', views.student_experiment_detail_view, name='student_experiment_detail_view'),
 ]

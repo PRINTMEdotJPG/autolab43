@@ -4,6 +4,7 @@
 {% block title %}Управление экспериментом #{{ experiment.id }}{% endblock %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="{% static 'css/styles.css' %}">
 <style>
     .chart-container {
         position: relative;
@@ -113,7 +114,7 @@
                         <div class="col-md-6 mb-2">
                             <label class="form-label">Частота (Гц)</label>
                             <input type="number" class="form-control stage-freq" 
-                                   value="{{ stage.frequency|default:'' }}" min="1000" max="6000" required>
+                                   value="{{ stage.frequency|default:'1500' }}" min="1000" max="6000" required>
                         </div>
                         <div class="col-md-6 mb-2 d-flex align-items-end">
                             <button class="btn btn-{% if stage.data %}outline-success{% else %}primary{% endif %} record-btn w-100"
@@ -151,17 +152,12 @@
 {% endblock %}
 
 {% block extra_js %}
+<!-- Сначала загружаем Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/charts.js' %}"></script>
+<script src="{% static 'js/recording.js' %}"></script>
 <script src="{% static 'js/assistant_control.js' %}"></script>
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        console.log('DOM загружен, инициализация приложения...');
-        initializeApp().then(success => {
-            if (success) {
-                console.log('Приложение успешно инициализировано');
-            } else {
-                console.error('Ошибка при инициализации приложения');
-            }
-        });
-    });
+    window.EXPERIMENT_ID = "{{ experiment.id|escapejs }}";
 </script>
 {% endblock %}
