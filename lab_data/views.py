@@ -414,37 +414,58 @@ def save_experiment_results(request, experiment_id):
         results_entry.student_speed = student_speed
         results_entry.student_gamma = student_gamma
 
-        # Расчет погрешности. Сравниваем student_gamma с gamma_reference (эталонное значение 1.4)
-        # или с results_entry.gamma_calculated (системно рассчитанное)
-        # В данном случае, по названию поля error_percent, логичнее сравнивать с эталоном.
-        if results_entry.gamma_reference != 0:
-            error = abs((student_gamma - results_entry.gamma_reference) / results_entry.gamma_reference) * 100
-            results_entry.error_percent = round(error, 2)
-        else:
-            results_entry.error_percent = None # Или 0.0, если эталон 0
+        # Расчет погрешности.
+        # Сравниваем student_gamma с results_entry.gamma_calculated (системно рассчитанное значение).
+        system_gamma = results_entry.gamma_calculated
+        error_percent_gamma = None
 
-        # Определение статуса на основе погрешности
-        # Вам нужно определить порог, например, 5% или 10%
-        ACCEPTABLE_ERROR_PERCENT = 10.0 
-        if results_entry.error_percent is not None and results_entry.error_percent <= ACCEPTABLE_ERROR_PERCENT:
+        if system_gamma is not None and system_gamma != 0:
+            error_percent_gamma = abs((student_gamma - system_gamma) / system_gamma) * 100
+            results_entry.error_percent = round(error_percent_gamma, 2)
+        else:
+            # Если системная гамма не рассчитана или равна 0, ошибку корректно посчитать нельзя.
+            # Можно установить error_percent в None или обработать как особый случай.
+            results_entry.error_percent = None 
+            logger.warning(f"System gamma for experiment {experiment_id} is None or zero. Cannot calculate error.")
+
+        # Определение статуса на основе погрешности гаммы
+        ACCEPTABLE_ERROR_PERCENT = 5.0 
+        if error_percent_gamma is not None and error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT:
             results_entry.status = 'success' # Успешно, в пределах нормы
-        else:
+        elif error_percent_gamma is not None: # Ошибка есть и она больше порога
             results_entry.status = 'fail' # Неудача, большая погрешность
+        else:
+            # Если error_percent_gamma is None (например, system_gamma некорректна),
+            # статус может остаться 'pending_student_input' или стать специфическим статусом ошибки расчета.
+            # Для простоты пока оставим как есть, но это место для возможного улучшения логики.
+            # Если лаборант не завершил расчеты system_gamma, то студент не должен страдать.
+            # Возможно, стоит вернуть ошибку, что системные данные не готовы.
+            # Пока что, если system_gamma нет, results_entry.status не изменится от 'pending_student_input'.
+            pass # Статус не меняем, если ошибка не рассчитана
         
-        # Если эксперимент был в статусе 'pending_student_input', можно перевести его в 'final_completed'
-        # или использовать 'success'/'fail' как финальные.
-        # Для примера, используем 'success'/'fail' как финальные для Results.
-        # Статус самого Experiments ('completed') остается.
-
         results_entry.save()
         
-        logger.info(f"Студент {request.user.email} сохранил результаты для эксперимента {experiment_id}. ")
-        return JsonResponse({
-            'status': 'success',
+        logger.info(f"Студент {request.user.email} сохранил результаты для эксперимента {experiment_id}. "
+                    f"Student Gamma: {student_gamma}, System Gamma: {system_gamma}, Error: {results_entry.error_percent}%, Status: {results_entry.status}")
+        
+        response_payload = {
+            'status': 'success_submission', # Используем новый общий статус для успешной *отправки*
             'message': 'Результаты успешно сохранены!',
-            'results_status': results_entry.status,
-            'error_percent': results_entry.error_percent
-        })
+            'results_status': results_entry.status, # 'success', 'fail', или 'pending_student_input' (если ошибка не считалась)
+            'error_percent_gamma': results_entry.error_percent,
+            'student_values': {
+                'gamma': student_gamma,
+                'speed': student_speed
+            },
+            'system_values': {
+                'gamma': system_gamma
+                # Добавить системную скорость, если она будет
+            }
+        }
+        if results_entry.status == 'fail':
+            response_payload['comparison_message'] = f"Отклонение вашего значения γ ({student_gamma}) от системного ({system_gamma}) составило {results_entry.error_percent}%."
+
+        return JsonResponse(response_payload)
     
     except Experiments.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден'}, status=404)
@@ -844,6 +865,7 @@ def complete_experiment(request, experiment_id):
             return JsonResponse({'status': 'error', 'message': 'Нет прав'}, status=403)
 
         data = json.loads(request.body)
+        logger.info(f"complete_experiment called for experiment {experiment_id}. Received steps data: {data.get('steps')}")
         
         # Обновляем данные эксперимента
         experiment.temperature = float(data['temperature'])
@@ -889,46 +911,147 @@ def get_experiment_details_for_student(request, experiment_id):
 
     try:
         experiment = get_object_or_404(Experiments, id=experiment_id, user=request.user)
+        # Пытаемся получить связанную запись Results. Она может отсутствовать, если что-то пошло не так
+        # или если эксперимент еще не был 'completed' лаборантом (хотя API вызывается студентом уже после этого).
         results_entry = Results.objects.filter(experiment=experiment).first()
 
-        if not experiment:
-            logger.warning(f"Student {request.user.email} tried to access non-existent or non-owned experiment {experiment_id}")
-            return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден или у вас нет к нему доступа'}, status=404)
-
-        # Собираем данные для студента
-        # Мы передаем данные из experiment.stages, так как они содержат minima, frequency и т.д., 
-        # рассчитанные и сохраненные консумером.
         stages_data_for_student = []
         if isinstance(experiment.stages, list):
-            for stage_index, stage in enumerate(experiment.stages):
-                if isinstance(stage, dict): # Убедимся, что это словарь
+            for stage_index, stage_dict in enumerate(experiment.stages):
+                if isinstance(stage_dict, dict):
+                    raw_minima_data = stage_dict.get('minima', []) # Используем 'minima'
+                    
+                    minima_table_for_stage = []
+                    l_values_for_delta_calc = [] # Для расчета delta_l
+
+                    if isinstance(raw_minima_data, list):
+                        # Сортируем минимумы по 'distance_m' перед использованием, если они еще не отсортированы
+                        # Это важно для корректного отображения и расчета delta_l.
+                        # Предполагаем, что 'distance_m' всегда присутствует и является числом.
+                        # Если 'distance_m' может отсутствовать или быть None, нужна доп. проверка.
+                        try:
+                            # Фильтруем элементы, где 'distance_m' может быть None или отсутствовать, перед сортировкой
+                            valid_minima_for_sort = [m for m in raw_minima_data if isinstance(m, dict) and isinstance(m.get('distance_m'), (int, float))]
+                            sorted_minima_data = sorted(valid_minima_for_sort, key=lambda x: x['distance_m'])
+                        except TypeError:
+                            # В случае ошибки сортировки (например, 'distance_m' - не число), используем исходный порядок
+                            # или логируем ошибку и пропускаем. Пока используем исходный.
+                            logger.warning(f"Ошибка сортировки минимумов для этапа {stage_index + 1} эксперимента {experiment.id}. Используется исходный порядок.")
+                            sorted_minima_data = [m for m in raw_minima_data if isinstance(m, dict)]
+
+
+                        for idx, minimum_item in enumerate(sorted_minima_data): # Используем отсортированные данные
+                            if isinstance(minimum_item, dict) and 'distance_m' in minimum_item: # Эта проверка уже была частью valid_minima_for_sort
+                                position = minimum_item.get('distance_m')
+                                # Дополнительная проверка, что position это число (хотя sorted должен был это обеспечить)
+                                if isinstance(position, (int, float)):
+                                    minima_table_for_stage.append({
+                                        'minimum_number': idx + 1, # Нумерация основана на отсортированном списке
+                                        'position_m': round(position, 4) # Округляем для консистентности
+                                    })
+                                    l_values_for_delta_calc.append(position) # Собираем значения для delta_l
+                    
+                    # Расчет delta_l теперь на основе l_values_for_delta_calc
+                    # l_values_for_delta_calc уже должны быть отсортированы по возрастанию distance_m
+                    delta_l_values = []
+                    if len(l_values_for_delta_calc) > 1:
+                        for i in range(len(l_values_for_delta_calc) - 1):
+                            try:
+                                # Разность между соседними (уже отсортированными) позициями
+                                diff = round(l_values_for_delta_calc[i+1] - l_values_for_delta_calc[i], 4) 
+                                if diff > 0: # Убедимся, что разница положительная (на случай дубликатов или ошибок сортировки)
+                                    delta_l_values.append(diff)
+                                else:
+                                    logger.warning(f"Получена не положительная разность delta_l ({diff}) для этапа {stage_index + 1}, exp {experiment.id}. Позиции: {l_values_for_delta_calc[i+1]}, {l_values_for_delta_calc[i]}. Пропускается.")
+
+                            except (TypeError, IndexError): 
+                                logger.warning(f"Ошибка при расчете delta_l для этапа {stage_index+1}, experiment {experiment.id}", exc_info=True)
+                                pass
+                    
+                    average_delta_l = None
+                    if delta_l_values:
+                        try:
+                            average_delta_l = round(sum(delta_l_values) / len(delta_l_values), 4)
+                        except ZeroDivisionError:
+                            average_delta_l = None
+
+                    # --- ДОБАВЛЕНО ЛОГИРОВАНИЕ --- 
+                    logger.info(f"Processing stage_dict for student view (exp {experiment.id}, stage index {stage_index}): {stage_dict}")
+                    # --- КОНЕЦ ЛОГИРОВАНИЯ ---
+
                     stages_data_for_student.append({
                         'stage_number': stage_index + 1,
-                        'frequency': stage.get('frequency'),
-                        'temperature': stage.get('temperature', experiment.temperature), # Температура этапа или общая
-                        'minima': stage.get('minima', []), # Список словарей с 'position', 'amplitude', 'time', 'distance'
-                        # Можно добавить и другие полезные данные, если они есть в stage
+                        'frequency_hz': stage_dict.get('frequency'),
+                        # 'temperature_celsius': stage_dict.get('temperature', experiment.temperature), # Если нужна температура этапа
+                        'minima_table': minima_table_for_stage,
+                        'delta_l_values_m': delta_l_values,
+                        'average_delta_l_m': average_delta_l
                     })
                 else:
-                    logger.warning(f"Этап {stage_index+1} в эксперименте {experiment.id} не является словарем: {stage}")
+                    logger.warning(f"Этап {stage_index+1} в эксперименте {experiment.id} не является словарем: {stage_dict}")
         else:
             logger.warning(f"experiment.stages для эксперимента {experiment.id} не является списком: {experiment.stages}")
 
-        # Данные из Results, если они есть и нужны (например, системные расчеты для сравнения ПОСЛЕ ввода студента)
-        # На данном этапе (до ввода студентом) они могут быть не нужны, или нужны только для справки.
-        # results_data = model_to_dict(results_entry) if results_entry else None 
+        global_temp_celsius = experiment.temperature
+        global_temp_kelvin = None
+        if global_temp_celsius is not None:
+            global_temp_kelvin = round(global_temp_celsius + 273.15, 2)
+
+        system_results_data = None
+        student_submitted_data = None
+        results_status = None
+        error_details = None
+
+        if results_entry:
+            results_status = results_entry.status
+            system_results_data = {
+                'gamma': results_entry.gamma_calculated, # Системная гамма
+                # Добавить system_speed_of_sound, если будет в модели Results
+                # 'speed_of_sound': results_entry.system_speed_of_sound 
+            }
+            if results_entry.student_gamma is not None or results_entry.student_speed is not None:
+                student_submitted_data = {
+                    'gamma': results_entry.student_gamma,
+                    'speed_of_sound': results_entry.student_speed
+                }
+            
+            # Если есть ошибка, и статус 'fail', формируем детали
+            if results_status == 'fail' and results_entry.error_percent is not None:
+                error_details = {
+                    'student_gamma': results_entry.student_gamma,
+                    'system_gamma': results_entry.gamma_calculated, # Сравниваем с системной
+                    'error_percent_gamma': results_entry.error_percent, # Предполагаем, что error_percent это для гаммы
+                    'message': f"Отклонение значения γ студента ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent}%."
+                    # Можно добавить аналогично для скорости звука, если будет сравниваться
+                }
+
+        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        # Предполагаем, что settings.DEBUG доступен, или можно установить True/False напрямую
+        try:
+            from django.conf import settings
+            DEBUG_MODE_FOR_STUDENT_PROFILE = settings.DEBUG 
+        except ImportError:
+            DEBUG_MODE_FOR_STUDENT_PROFILE = True # Запасной вариант, если settings не импортируются здесь напрямую
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
 
         response_data = {
             'status': 'success',
             'experiment_id': experiment.id,
             'created_at': experiment.created_at.strftime('%Y-%m-%d %H:%M:%S') if experiment.created_at else None,
-            'experiment_status': experiment.status,
-            'global_temperature': experiment.temperature, # Общая температура, если нужна
+            'experiment_status_raw': experiment.status, # Статус из Experiments
+            'global_temperature_celsius': global_temp_celsius,
+            'global_temperature_kelvin': global_temp_kelvin,
+            'molar_mass_air_kg_mol': 0.029, # кг/моль
             'stages': stages_data_for_student,
-            # 'system_results': results_data # Раскомментировать, если нужно передавать данные из Results
+            'system_calculated_results': system_results_data, # Системные расчеты
+            'student_submitted_results': student_submitted_data, # Что студент уже вводил
+            'results_processing_status': results_status, # Статус из Results (pending_student_input, success, fail)
+            'error_details': error_details, # Информация об ошибке, если есть
+            'debug_mode_for_student_profile': DEBUG_MODE_FOR_STUDENT_PROFILE # --- ДОБАВЛЕНО ---
         }
 
-        logger.info(f"Student {request.user.email} accessed data for experiment {experiment_id}")
+        logger.info(f"Student {request.user.email} accessed data for experiment {experiment_id}. Data: {response_data}")
         return JsonResponse(response_data)
 
     except Http404:

@@ -43,9 +43,9 @@ class AudioConsumer(AsyncWebsocketConsumer):
         
         # Параметры поиска минимумов
         self.minima_params = {
-            'min_amplitude': 0.3,       # Минимальная нормализованная амплитуда для пика в инвертированном сигнале (0-1)
-            'min_distance_ratio': 0.03, # Минимальное относительное расстояние между пиками (доля от общего числа точек)
-            'min_prominence': 0.15,     # Минимальная выраженность пика (насколько он выделяется)
+            'min_amplitude': 0.05,       # Минимальная нормализованная амплитуда для пика в инвертированном сигнале (0-1) -> norm_amp <= 0.95 (было 0.1 -> 0.9)
+            'min_distance_ratio': 0.12, # Минимальное относительное расстояние между пиками (доля от общего числа точек) - было 0.05
+            'min_prominence': 0.05,     # Минимальная выраженность пика (насколько он выделяется) - было 0.03
             'min_width_ratio': 0.01,    # Минимальная относительная ширина пика
             'min_time_separation_s': 0.015 # Минимальное время между минимумами в секундах (для _find_minima_by_signal)
         }
@@ -191,7 +191,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 f"  Сообщение: {str(e)}\\n"
                 "  Трассировка:", exc_info=True
             )
-            await self.send_error(f"Ошибка обработки: {str(e)}")
+            await self.send_error(f"Критическая ошибка на сервере: {type(e).__name__}")
 
     async def handle_unknown_type(self, data):
         """Обработчик для неизвестных типов сообщений."""
@@ -218,10 +218,10 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 "Ошибка при обработке неизвестного типа сообщения\\n"
                 f"  Тип ошибки: {type(e).__name__}\\n"
                 f"  Сообщение: {str(e)}\\n"
-                f"  Данные сообщения: {data}\\n"
+                f"  Данные сообщения: {data}\\\n"
                 "  Трассировка:", exc_info=True
             )
-            await self.send_error("Внутренняя ошибка при обработке сообщения")
+            await self.send_error("Внутренняя ошибка при обработке неизвестного типа сообщения")
 
     async def handle_experiment_params(self, data):
         """Обработчик параметров эксперимента."""
@@ -241,17 +241,17 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             if None in (step, frequency, temperature) or not isinstance(step, int):
                 logger.error(f"Отсутствуют или некорректные обязательные параметры: step={step}, frequency={frequency}, temperature={temperature}")
-                await self.send_error("Требуются: step (int), frequency (float), temperature (float)")
+                await self.send_error("Требуются: step (int), frequency (float), temperature (float)", step=step if isinstance(step, int) else None)
                 return
 
             if not isinstance(frequency, (int, float)) or frequency <= 0:
                 logger.error(f"Некорректная частота: {frequency}")
-                await self.send_error("Частота должна быть положительным числом")
+                await self.send_error("Частота должна быть положительным числом", step=step)
                 return
 
-            if not isinstance(temperature, (int, float)): # Диапазон температур проверяется на клиенте
+            if not isinstance(temperature, (int, float)): # Добавим проверку для температуры
                 logger.error(f"Некорректная температура: {temperature}")
-                await self.send_error("Температура должна быть числом")
+                await self.send_error("Температура должна быть числом", step=step)
                 return
 
             step_index = step - 1
@@ -287,12 +287,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
             await self.send_json(confirmation)
             logger.info("Подтверждение получения параметров шага успешно отправлено клиенту.")
 
-        except ValueError as e: # Ошибки преобразования float()
-            logger.error(f"Ошибка формата параметров: {str(e)}\\nДанные: {data}", exc_info=True)
-            await self.send_error("Ошибка формата числовых параметров (частота/температура).")
+        except ValueError as e:
+            logger.error(f"Ошибка значения при обработке параметров: {str(e)}", exc_info=True)
+            await self.send_error(f"Ошибка значения: {str(e)}", step=data.get('step'))
         except Exception as e:
-            logger.error(f"Ошибка обработки параметров эксперимента: {type(e).__name__} - {str(e)}", exc_info=True)
-            await self.send_error(f"Внутренняя ошибка обработки параметров: {str(e)}")
+            logger.error(f"Неожиданная ошибка при обработке параметров эксперимента: {str(e)}", exc_info=True)
+            await self.send_error(f"Внутренняя ошибка сервера: {str(e)}", step=data.get('step'))
 
 
     async def process_complete_audio(self, data):
@@ -333,7 +333,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                      self.experiment_steps[step_index] = {}
 
                 self.experiment_steps[step_index].update({
-                    'audio_samples': samples.tolist() if samples is not None else None, 
+                    # 'audio_samples': samples.tolist() if samples is not None else None, # Удалено для уменьшения размера данных и предотвращения проблем сохранения
                     'minima': minima, 
                     'status': 'audio_processed',
                     'distance_samples_cm': distances_cm, 
@@ -407,104 +407,144 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
 
     async def calculate_final_results(self):
-        """Расчет и сохранение финальных результатов эксперимента."""
+        """Расчет и сохранение финальных результатов эксперимента (средние L, v, γ)."""
         try:
             logger.info("Начало расчета финальных результатов эксперимента...")
             
-            results_summary = [] 
-            all_steps_valid_for_calc = True
-
-            for idx, step_data in enumerate(self.experiment_steps):
-                step_num = idx + 1
-                if not isinstance(step_data, dict) or step_data.get('status') != 'audio_processed':
-                    logger.warning(f"Шаг {step_num} не готов для финального расчета (статус: {step_data.get('status', 'N/A') if isinstance(step_data, dict) else 'Не словарь'}).")
-                    all_steps_valid_for_calc = False
-                    continue # Пропускаем этот шаг, но не прерываем для других
-
-                minima_for_step = step_data.get('minima')
-                if not minima_for_step or len(minima_for_step) < 2:
-                    logger.warning(f"Недостаточно минимумов для шага {step_num} ({len(minima_for_step) if minima_for_step else 0}). Расчет для этого шага невозможен.")
-                    step_data.update({'system_speed': float('nan'), 'system_gamma': float('nan')}) # Помечаем как NaN
-                    all_steps_valid_for_calc = False
-                    continue
-
-                frequency = step_data.get('frequency')
-                temperature = step_data.get('temperature')
-
-                if frequency is None or temperature is None:
-                    logger.warning(f"Отсутствует частота или температура для шага {step_num}. Расчет невозможен.")
-                    step_data.update({'system_speed': float('nan'), 'system_gamma': float('nan')})
-                    all_steps_valid_for_calc = False
-                    continue
-                
-                # `calculate_speed` ожидает список словарей минимумов, где каждый содержит `time_sec`
-                # `calculate_gamma` ожидает скорость и температуру
-                raw_speed = self.calculate_speed(minima_for_step, float(frequency))
-                
-                # Логика коррекции скорости на движение (avg_speed_movement_m_s) была сложной и не до конца ясной.
-                # Пока упростим: corrected_speed = raw_speed. Если find_minima уже учитывает движение, это ОК.
-                # Если нужна более сложная коррекция, ее нужно будет реализовать здесь.
-                corrected_speed_m_s = raw_speed 
-                
-                gamma = self.calculate_gamma(corrected_speed_m_s, float(temperature))
-                
-                step_data.update({
-                    'system_speed': corrected_speed_m_s,
-                    'system_gamma': gamma,
-                    'raw_speed': raw_speed, 
-                })
-                
-                results_summary.append({
-                    'step': step_num,
-                    'speed': round(corrected_speed_m_s, 4) if not np.isnan(corrected_speed_m_s) else None,
-                    'gamma': round(gamma, 4) if not np.isnan(gamma) else None,
-                    'raw_speed': round(raw_speed, 4) if not np.isnan(raw_speed) else None,
-                })
-
-            if not all_steps_valid_for_calc:
-                 logger.warning("Не все шаги были валидны для расчета. Финальные результаты могут быть неполными или отсутствовать.")
+            all_valid_gammas = []
+            all_valid_speeds = []
             
-            # Обновляем stages в модели Experiment перед сохранением
+            # Обновляем self.experiment.stages из базы данных перед расчетом, чтобы иметь актуальные данные
+            self.experiment = await database_sync_to_async(Experiments.objects.get)(id=self.experiment_id)
+            self.experiment_steps = self.experiment.stages if isinstance(self.experiment.stages, list) else self.experiment_steps
+
+
+            for i, stage_data in enumerate(self.experiment_steps):
+                step_num = i + 1
+                # Убедимся, что stage_data это словарь
+                if not isinstance(stage_data, dict):
+                    logger.warning(f"Данные этапа {step_num} не являются словарем, исправляю. Данные: {stage_data}")
+                    # Заменяем некорректные данные на пустую структуру с ошибкой
+                    self.experiment_steps[i] = {'status': 'error_invalid_data_format', 'minima': [], 'frequency': None, 'temperature': None, 'system_speed': None, 'system_gamma': None}
+                    stage_data = self.experiment_steps[i] # Используем исправленный stage_data для дальнейшей логики этого шага
+                    # Не используем continue, чтобы этот этап все равно был обработан ниже (как этап без валидных данных для расчета)
+
+                # Случай 1: Этап уже был успешно рассчитан ранее
+                if stage_data.get('status') == 'calculated_successfully' and \
+                   stage_data.get('system_gamma') is not None and \
+                   stage_data.get('system_speed') is not None:
+                    
+                    gamma_to_add = stage_data['system_gamma'] # Должны быть float или None
+                    speed_to_add = stage_data['system_speed'] # Должны быть float или None
+
+                    # Добавляем только если gamma валидна (speed должна быть валидна, если gamma валидна)
+                    all_valid_gammas.append(gamma_to_add) 
+                    if speed_to_add is not None: # Убедимся, что скорость тоже добавляется, если она есть
+                        all_valid_speeds.append(speed_to_add)
+                    logger.info(f"Шаг {step_num}: Используются ранее сохраненные и валидные результаты: Speed={speed_to_add}, Gamma={gamma_to_add}")
+                    # Статус и данные этапа не меняем, они уже корректны
+
+                # Случай 2: Этап ожидает расчета (статус 'audio_processed') и имеет необходимые данные
+                elif stage_data.get('status') == 'audio_processed' and stage_data.get('minima') and stage_data.get('frequency'):
+                    minima = stage_data.get('minima') 
+                    frequency = stage_data.get('frequency')
+                    temperature = stage_data.get('temperature', self.experiment.temperature if self.experiment else 20.0)
+
+                    if not minima or not isinstance(minima, list) or len(minima) < 2:
+                        logger.warning(f"Недостаточно минимумов для шага {step_num} ({len(minima) if minima else 0}). Расчет невозможен.")
+                        stage_data['system_speed'] = None 
+                        stage_data['system_gamma'] = None 
+                        stage_data['status'] = 'error_insufficient_minima'
+                    else:
+                        valid_minima_distances = []
+                        for m_idx, m_val in enumerate(minima):
+                            if isinstance(m_val, dict) and isinstance(m_val.get('distance_m'), (int, float)):
+                                valid_minima_distances.append(float(m_val['distance_m']))
+                            else:
+                                logger.warning(f"Шаг {step_num}, минимум {m_idx}: некорректный формат или отсутствует 'distance_m'. Данные: {m_val}")
+                        
+                        if len(valid_minima_distances) < 2:
+                            logger.warning(f"Недостаточно валидных минимумов с 'distance_m' для шага {step_num} ({len(valid_minima_distances)}). Расчет невозможен.")
+                            stage_data['system_speed'] = None
+                            stage_data['system_gamma'] = None
+                            stage_data['status'] = 'error_invalid_minima_data'
+                        else:    
+                            delta_l_values = [valid_minima_distances[k+1] - valid_minima_distances[k] for k in range(len(valid_minima_distances)-1)]
+                            avg_delta_l = np.mean(delta_l_values) if delta_l_values else 0.0
+                            
+                            system_speed = 2 * avg_delta_l * frequency if avg_delta_l > 0 and frequency is not None and frequency > 0 else 0.0
+                            
+                            logger.info(f"Шаг {step_num}: Перед вызовом calculate_gamma. system_speed = {system_speed}, temperature = {temperature}")
+                            system_gamma = self.calculate_gamma(system_speed, temperature) if temperature is not None else None
+
+                            stage_data['avg_delta_l_m'] = float(avg_delta_l) if not np.isnan(avg_delta_l) else None
+                            stage_data['system_speed'] = float(system_speed) if system_speed is not None and not np.isnan(system_speed) else None
+                            stage_data['system_gamma'] = float(system_gamma) if system_gamma is not None and not np.isnan(system_gamma) else None
+                            
+                            if stage_data['system_gamma'] is not None: # Проверяем, что gamma рассчиталась (не NaN/None)
+                                all_valid_gammas.append(stage_data['system_gamma'])
+                                if stage_data['system_speed'] is not None: # system_speed тоже должен быть валидным
+                                   all_valid_speeds.append(stage_data['system_speed'])
+                                logger.info(f"Шаг {step_num}: Скорость = {stage_data['system_speed']:.2f} м/с, γ = {stage_data['system_gamma']:.4f} - значения добавлены для расчета среднего.")
+                                stage_data['status'] = 'calculated_successfully'
+                            else:
+                                logger.warning(f"Значение γ для шага {step_num} равно None или NaN после расчета. Скорость: {stage_data['system_speed']}. T: {temperature}°C. Статус: error_calculation_failed_for_stage")
+                                stage_data['status'] = 'error_calculation_failed_for_stage'
+                
+                # Случай 3: Этап не подходит для расчета (не 'audio_processed', не 'calculated_successfully' или нет данных)
+                else:
+                    logger.warning(f"Шаг {step_num} пропускается для финального расчета (статус: {stage_data.get('status')}, есть минимумы: {stage_data.get('minima') is not None}, есть частота: {stage_data.get('frequency') is not None}).")
+                    # Убедимся, что system_speed и system_gamma равны None, если они не были рассчитаны ранее и не являются частью 'calculated_successfully'
+                    if 'system_speed' not in stage_data or stage_data.get('status') != 'calculated_successfully': 
+                        stage_data['system_speed'] = None
+                    if 'system_gamma' not in stage_data or stage_data.get('status') != 'calculated_successfully': 
+                        stage_data['system_gamma'] = None
+                    
+                    # Сохраняем существующий статус ошибки или устанавливаем 'skipped_final_calc'
+                    if stage_data.get('status') not in ['error_insufficient_minima', 'error_invalid_data_format', 'error_invalid_minima_data', 'error_calculation_failed_for_stage', 'calculated_successfully']:
+                         stage_data.setdefault('status', 'skipped_in_final_calc')
+
             self.experiment.stages = self.experiment_steps 
             
-            # Статус эксперимента и сохранение Results
-            # Если хотя бы один шаг был успешно посчитан (не NaN)
-            valid_gammas = [s.get('system_gamma') for s in self.experiment_steps if isinstance(s, dict) and s.get('system_gamma') is not None and not np.isnan(s.get('system_gamma'))]
+            final_avg_gamma = np.mean(all_valid_gammas) if all_valid_gammas else None
+            final_avg_speed = np.mean(all_valid_speeds) if all_valid_speeds else None
+
+            final_avg_gamma_float = float(final_avg_gamma) if final_avg_gamma is not None and not np.isnan(final_avg_gamma) else None
+            final_avg_speed_float = float(final_avg_speed) if final_avg_speed is not None and not np.isnan(final_avg_speed) else None
+
+            # ИЗМЕНЕНО: Логика установки финального статуса эксперимента
+            if all_valid_gammas: # Если есть хотя бы одно рассчитанное значение gamma
+                self.experiment.status = 'completed_success'
+                logger.info(f"Финальные результаты: Средняя γ = {final_avg_gamma_float:.4f}, Средняя скорость = {final_avg_speed_float:.2f} м/с. Эксперимент успешно завершен.")
+            else: # Ни одного значения gamma не было успешно рассчитано
+                self.experiment.status = 'error_in_calculation'
+                logger.error(f"Не удалось рассчитать γ ни для одного шага эксперимента {self.experiment_id}. Финальная γ: {final_avg_gamma_float}, финальная скорость: {final_avg_speed_float}. Статус: {self.experiment.status}")
             
-            if valid_gammas:
-                avg_system_gamma = np.mean(valid_gammas)
-                self.experiment.status = 'completed' # Эксперимент считается завершенным лаборантом
-                logger.info(f"Эксперимент {self.experiment.id} успешно завершен. Средний γ = {avg_system_gamma:.4f}")
-                
-                results_defaults = {
-                    'detailed_results': self.experiment_steps, 
-                    'status': 'pending_student_input', 
-                    'gamma_calculated': float(avg_system_gamma), 
-                    'student_gamma': None, 
-                    'student_speed': None, 
-                    'error_percent': None  
-                }
-                await database_sync_to_async(Results.objects.update_or_create)(
-                    experiment=self.experiment,
-                    defaults=results_defaults
-                )
-                logger.info(f"Запись в Results для эксперимента {self.experiment.id} создана/обновлена.")
-            else:
-                avg_system_gamma = float('nan') # Или 0.0, или None
-                self.experiment.status = 'error_in_calculation' # Или другой статус, указывающий на проблему
-                logger.error(f"Не удалось рассчитать γ ни для одного шага эксперимента {self.experiment.id}. Статус: {self.experiment.status}")
-                 # Results можно не создавать или создать с ошибкой
+            results_entry_obj, created = await database_sync_to_async(Results.objects.get_or_create)(experiment=self.experiment)
+            
+            # Сохраняем ЛЮБОЕ рассчитанное среднее gamma, или 0.0 если его нет (т.к. поле не nullable)
+            results_entry_obj.gamma_calculated = final_avg_gamma_float if final_avg_gamma_float is not None else 0.0 
+            if final_avg_gamma_float is None:
+                logger.warning(f"Финальное среднее значение gamma равно None или NaN. Устанавливаю gamma_calculated = 0.0 для эксперимента {self.experiment_id}")
 
-            await database_sync_to_async(self.experiment.save)() # Сохраняем основной эксперимент с обновленным статусом и этапами
-            logger.info(f"Финальный статус эксперимента {self.experiment.id} ({self.experiment.status}) и обновленные этапы сохранены в БД.")
+            # speed_of_sound_calculated is nullable, so None is fine if final_avg_speed_float is None
+            results_entry_obj.speed_of_sound_calculated = final_avg_speed_float
+            
+            results_entry_obj.calculation_status = self.experiment.status
+            await database_sync_to_async(results_entry_obj.save)()
+            logger.info(f"Финальные результаты сохранены в Results для эксперимента {self.experiment_id}. ID Записи: {results_entry_obj.experiment_id}") # ИСПРАВЛЕНО: results_entry_obj.experiment_id
 
-            final_response_message = {
-                'type': 'experiment_complete', # Сигнал клиенту, что все завершено со стороны сервера
-                'message': f'Эксперимент завершен. Статус: {self.experiment.status}. Средний γ (расч.): {avg_system_gamma:.4f if not np.isnan(avg_system_gamma) else "N/A"}',
-                'steps_results': results_summary, # Отправляем только сводку
-                'average_gamma': float(avg_system_gamma) if not np.isnan(avg_system_gamma) else None
-            }
-            await self.send_json(final_response_message)
+            await database_sync_to_async(self.experiment.save)()
+            logger.info(f"Статус эксперимента {self.experiment_id} обновлен на {self.experiment.status} и этапы сохранены.")
+            
+            await self.send_json({
+                'type': 'experiment_completed',
+                'experiment_id': self.experiment_id,
+                'status': self.experiment.status,
+                'calculated_gamma': final_avg_gamma_float,
+                'calculated_speed': final_avg_speed_float,
+                'stages_data': self.experiment_steps
+            })
 
         except Exception as e:
             logger.error(f"Критическая ошибка при расчете финальных результатов: {type(e).__name__} - {str(e)}", exc_info=True)
@@ -553,18 +593,20 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             updated_any_stage = False
             for stage_info in stages_data:
-                step = stage_info.get('step')
-                frequency = stage_info.get('frequency')
+                step_num_from_payload = stage_info.get('step_number') # Используем 'step_number' как на клиенте
+                frequency_from_payload = stage_info.get('frequency')
                 
-                if step is None or frequency is None:
+                logger.debug(f"  Обработка данных для этапа из payload: step_number={step_num_from_payload}, frequency={frequency_from_payload}")
+
+                if step_num_from_payload is None or frequency_from_payload is None:
                     logger.warning(f"Пропущен этап в update_all_params: отсутствует step или frequency. Данные: {stage_info}")
                     continue
                 
                 try:
-                    step_idx = int(step) - 1
-                    freq_val = float(frequency)
+                    step_idx = int(step_num_from_payload) - 1
+                    freq_val = float(frequency_from_payload)
                 except ValueError:
-                    logger.warning(f"Некорректные данные для этапа в update_all_params: step={step}, freq={frequency}")
+                    logger.warning(f"Некорректные данные для этапа в update_all_params: step={step_num_from_payload}, freq={frequency_from_payload}")
                     continue
 
                 if 0 <= step_idx < len(self.experiment_steps):
@@ -578,7 +620,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     # self.experiment_steps[step_idx]['status'] = 'params_received'
                     updated_any_stage = True
                 else:
-                    logger.warning(f"Некорректный номер этапа {step} в update_all_params.")
+                    logger.warning(f"Некорректный номер этапа {step_num_from_payload} в update_all_params.")
             
             if updated_any_stage:
                 self.experiment.stages = self.experiment_steps
@@ -832,14 +874,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
         gamma = (v ** 2 * mu) / (R * T_kelvin)
         
-        # Ограничиваем разумные значения для воздуха (обычно 1.0 до 1.67)
-        # return max(1.0, min(1.7, gamma)) # Простое ограничение
-        if 1.0 <= gamma <= 2.0: # Более широкий диапазон для фиксации аномалий
-            return gamma
-        else:
-            logger.warning(f"Рассчитанное значение γ ({gamma:.4f}) выходит за пределы ожидаемого диапазона (1.0-2.0). Скорость: {v:.2f} м/с, Температура: {temperature_celsius}°C.")
-            return float('nan') # Возвращаем NaN, если значение неправдоподобно
-
+        logger.info(f"Рассчитанное значение γ: {gamma:.4f} (Скорость: {v:.2f} м/с, Температура: {temperature_celsius}°C)")
+        return gamma
 
     async def decode_audio(self, audio_bytes, audio_format):
         """Декодирование аудиоданных из различных форматов."""
@@ -956,20 +992,21 @@ class AudioConsumer(AsyncWebsocketConsumer):
             
             logger.debug(f"[Step {current_step_num}] amplitude_envelope stats before norm: Min={np.min(amplitude_envelope):.4f}, Max={np.max(amplitude_envelope):.4f}, Mean={np.mean(amplitude_envelope):.4f}, Median={np.median(amplitude_envelope):.4f}, 95th Pctl={np.percentile(amplitude_envelope, 95):.4f}, 99th Pctl={np.percentile(amplitude_envelope, 99):.4f}")
             
-            # Используем 99-й процентиль для устойчивости к выбросам
-            max_amp_robust = np.percentile(amplitude_envelope, 99)
+            # Используем 99-й процентиль для устойчивости к выбросам - ИЗМЕНЕНО НА np.max
+            # max_amp_robust = np.percentile(amplitude_envelope, 99)
+            max_amp_robust = np.max(amplitude_envelope)
             if max_amp_robust == 0: # Если и 99-й процентиль 0, возможно, весь сигнал нулевой
-                max_amp_robust = np.max(amplitude_envelope) # Попробуем абсолютный максимум в этом случае
-                if max_amp_robust == 0:
-                    logger.warning(f"[Step {current_step_num}] Максимальная амплитуда огибающей (и 99-й процентиль) равна нулю. Невозможно нормализовать.")
-                    return []
-                else:
-                    logger.warning(f"[Step {current_step_num}] 99-й процентиль амплитуды огибающей равен 0, используется абсолютный максимум: {max_amp_robust:.4f}")
+                # max_amp_robust = np.max(amplitude_envelope) # Попробуем абсолютный максимум в этом случае - УЖЕ СДЕЛАНО
+                # if max_amp_robust == 0:
+                logger.warning(f"[Step {current_step_num}] Максимальная амплитуда огибающей равна нулю. Невозможно нормализовать.")
+                return []
+                # else:
+                #    logger.warning(f"[Step {current_step_num}] 99-й процентиль амплитуды огибающей равен 0, используется абсолютный максимум: {max_amp_robust:.4f}")
             else:
-                logger.debug(f"[Step {current_step_num}] Для нормализации используется 99-й процентиль амплитуды огибающей: {max_amp_robust:.4f} (Абс. макс: {np.max(amplitude_envelope):.4f})")
+                logger.debug(f"[Step {current_step_num}] Для нормализации используется абсолютный максимум амплитуды огибающей: {max_amp_robust:.4f}")
 
             normalized_envelope = amplitude_envelope / max_amp_robust
-            # Опционально: ограничить сверху, чтобы избежать значений > 1 из-за процентиля
+            # Опционально: ограничить сверху, чтобы избежать значений > 1 из-за процентиля - КЛИППИНГ ОСТАВЛЕН
             normalized_envelope = np.clip(normalized_envelope, 0, 1.0) # Клиппинг от 0 до 1
 
             # 2. Временные шкалы
@@ -1083,7 +1120,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     'position_orig_audio': approx_orig_audio_pos, 
                     'amplitude': float(original_amplitude_val), 
                     'time_sec': float(time_sec_val),        
-                    'distance_cm': float(distance_cm_val)   
+                    'distance_cm': float(distance_cm_val),
+                    'distance_m': float(distance_cm_val) / 100.0 # ДОБАВЛЕНО distance_m
                 })
 
             minima_list.sort(key=lambda m: m['distance_cm']) # Сортировка по расстоянию для анализа
@@ -1165,7 +1203,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     'position_orig_audio': int(p_idx),
                     'amplitude': float(amp_at_minima),
                     'time_sec': float(time_at_minima_sec),
-                    'distance_cm': float(distance_cm_val) if distance_cm_val is not None else None
+                    'distance_cm': float(distance_cm_val) if distance_cm_val is not None else None,
+                    'distance_m': float(distance_cm_val) / 100.0 if distance_cm_val is not None else None
                 })
 
             minima_list.sort(key=lambda x: x['time_sec'])
@@ -1265,15 +1304,40 @@ class AudioConsumer(AsyncWebsocketConsumer):
             logger.error(f"Ошибка при построении графика амплитуда-расстояние для шага {current_step_num}: {type(e).__name__} - {str(e)}", exc_info=True)
 
     async def send_json(self, data):
-        """Отправка данных в формате JSON через WebSocket."""
+        """Отправляет JSON-сериализованные данные клиенту, обрабатывая типы NumPy и NaN."""
+        if not self.connected:
+            logger.warning(f"Попытка отправки данных при неактивном соединении: {str(data)[:100]}...")
+            return
+
         try:
-            if not self.connected:
-                logger.warning(
-                    "Попытка отправки при разорванном соединении\\n"
-                    f"  Текущее состояние: connected={self.connected}"
-                )
-                return False
-                
+            # Вспомогательная функция для конвертации специфичных типов Python/NumPy в JSON-совместимые типы
+            def convert_types_for_json(obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    # ИСПРАВЛЕНО: Обработка NaN для float numpy
+                    return None if np.isnan(obj) else float(obj)
+                elif isinstance(obj, np.ndarray):
+                    # ИСПРАВЛЕНО: Рекурсивно для элементов массива и обработка NaN внутри массива
+                    return [convert_types_for_json(x) for x in obj.tolist()]
+                elif isinstance(obj, float):
+                    # ИСПРАВЛЕНО: Обработка стандартного float NaN
+                    return None if np.isnan(obj) else obj # obj уже float, нет нужды в float(obj)
+                elif isinstance(obj, bytes): 
+                    try:
+                        return obj.decode('utf-8') # Попытка декодировать как строку
+                    except UnicodeDecodeError:
+                        return base64.b64encode(obj).decode('utf-8') # Если не строка, то base64
+                elif isinstance(obj, dict):
+                    return {k: convert_types_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_types_for_json(i) for i in obj]
+                elif hasattr(obj, 'isoformat'): # Для datetime объектов
+                    return obj.isoformat()
+                return obj
+
+            processed_data = convert_types_for_json(data)
+            
             def convert_numpy_types(obj):
                 """Рекурсивная конвертация numpy типов в Python типы для JSON."""
                 if isinstance(obj, (np.integer, np.int64)):
@@ -1290,7 +1354,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     return [convert_numpy_types(i) for i in obj]
                 return obj
                 
-            converted_data = convert_numpy_types(data)
+            converted_data = convert_numpy_types(processed_data)
             message = json.dumps(converted_data)
             await self.send(text_data=message)
             
@@ -1453,5 +1517,19 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
         except Exception as e:
             logger.error(f"Ошибка тестовой обработки: {type(e).__name__} - {str(e)}", exc_info=True)
+
+    async def send_error(self, error_message, step=None, error_code=None):
+        """Отправляет сообщение об ошибке клиенту."""
+        try:
+            error_data = {'type': 'error', 'message': error_message}
+            if step is not None:
+                error_data['step'] = step
+            if error_code is not None:
+                error_data['error_code'] = error_code
+            
+            logger.debug(f"Отправка ошибки клиенту: {error_data}")
+            await self.send_json(error_data)
+        except Exception as e:
+            logger.error(f"Не удалось отправить ошибку клиенту: {str(e)}", exc_info=True)
 
 # Конец класса AudioConsumer

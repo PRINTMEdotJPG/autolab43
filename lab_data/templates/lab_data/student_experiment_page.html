@@ -20,6 +20,20 @@
             <!-- Данные по этапам будут добавлены сюда динамически -->
         </div>
 
+        <!-- НАЧАЛО: Блок для отладочной информации -->
+        <div id="debug-info-container" style="display: none; margin-top: 20px; padding: 15px; border: 1px dashed #ccc; background-color: #f9f9f9;">
+            <h5><span class="badge bg-warning">Отладочная информация</span></h5>
+            
+            <h6>Системные расчеты:</h6>
+            <p><strong>Расчетный показатель адиабаты (γ):</strong> <span id="debug-system-gamma"></span></p>
+            
+            <h6>Детали по этапам (включая таблицы минимумов):</h6>
+            <div id="debug-stages-details">
+                <!-- Отладочная информация по этапам будет сюда добавлена -->
+            </div>
+        </div>
+        <!-- КОНЕЦ: Блок для отладочной информации -->
+
         <hr>
         <h4>Графики минимумов по этапам:</h4>
         <div id="charts-container" class="mb-4">
@@ -74,23 +88,56 @@
                 experimentDataLoading.style.display = 'none';
                 if (data.status === 'success') {
                     experimentDataContainer.style.display = 'block';
-                    temperatureEl.textContent = data.global_temperature;
+                    temperatureEl.textContent = data.global_temperature_celsius;
 
                     console.log('Получены данные эксперимента:', data);
 
-                    // Ограничиваем общий контейнер для улучшения производительности
+                    const debugInfoContainer = document.getElementById('debug-info-container');
+                    const debugSystemGammaEl = document.getElementById('debug-system-gamma');
+                    const debugStagesDetailsEl = document.getElementById('debug-stages-details');
+
+                    if (data.debug_mode_for_student_profile) {
+                        debugInfoContainer.style.display = 'block';
+                        
+                        if (data.system_calculated_results) {
+                            debugSystemGammaEl.textContent = data.system_calculated_results.gamma !== null && data.system_calculated_results.gamma !== undefined ? data.system_calculated_results.gamma.toFixed(4) : 'Нет данных';
+                        } else {
+                            debugSystemGammaEl.textContent = 'Нет данных';
+                        }
+
+                        debugStagesDetailsEl.innerHTML = '';
+                        data.stages.forEach(stage => {
+                            let stageHtml = `<div class="mb-2 p-2 border rounded"><strong>Этап ${stage.stage_number} (Частота: ${stage.frequency_hz} Hz):</strong><br>`;
+                            if (stage.minima_table && stage.minima_table.length > 0) {
+                                stageHtml += '<table class="table table-sm table-bordered w-auto"><thead><tr><th>№</th><th>L, м</th></tr></thead><tbody>';
+                                stage.minima_table.forEach(m => {
+                                    stageHtml += `<tr><td>${m.minimum_number}</td><td>${m.position_m}</td></tr>`;
+                                });
+                                stageHtml += '</tbody></table>';
+                            } else {
+                                stageHtml += '<p class="text-muted small">Таблица минимумов отсутствует или пуста.</p>';
+                            }
+                            stageHtml += `Среднее ΔL: ${stage.average_delta_l_m !== null && stage.average_delta_l_m !== undefined ? stage.average_delta_l_m + ' м' : 'Нет данных'}<br>`;
+                            stageHtml += '</div>';
+                            debugStagesDetailsEl.innerHTML += stageHtml;
+                        });
+
+                    } else {
+                        debugInfoContainer.style.display = 'none';
+                    }
+
                     chartsContainerEl.style.maxHeight = '800px';
                     chartsContainerEl.style.overflowY = 'auto';
 
                     data.stages.forEach((stage, index) => {
-                        console.log(`Этап ${stage.stage_number}, данные минимумов:`, stage.minima);
+                        console.log(`Этап ${stage.stage_number}, данные минимумов из API:`, stage.minima_table);
                         
                         const chartId = `chart-stage-${stage.stage_number}`;
                         
                         chartsContainerEl.innerHTML += `
                             <div class="card mb-3">
                                 <div class="card-header bg-light py-1">
-                                    <h5 class="mb-0">Этап ${stage.stage_number} (Частота: ${stage.frequency} Hz)</h5>
+                                    <h5 class="mb-0">Этап ${stage.stage_number} (Частота: ${stage.frequency_hz} Hz)</h5>
                                 </div>
                                 <div class="card-body p-2">
                                     <div class="chart-container" style="height: 180px;">
@@ -100,23 +147,21 @@
                             </div>
                         `;
                         
-                        // Подготавливаем данные для графика
-                        const minimaData = stage.minima ? stage.minima.map(m => ({
-                            position: m.position,
-                            amplitude: m.amplitude
+                        const minimaDataForChart = stage.minima_table ? stage.minima_table.map(m => ({
+                            position: m.position_m, 
+                            amplitude: m.amplitude !== undefined ? m.amplitude : 0.5 
                         })) : [];
                         
-                        console.log(`График ${chartId}, данные позиций/амплитуд:`, minimaData);
+                        console.log(`График ${chartId}, данные позиций/амплитуд для графика:`, minimaDataForChart);
                         
                         setTimeout(() => {
-                            if (minimaData.length > 0) {
-                                // График амплитуды от позиции
+                            if (minimaDataForChart.length > 0) {
                                 new Chart(document.getElementById(chartId), {
                                     type: 'scatter',
                                     data: {
                                         datasets: [{
                                             label: `Амплитуда сигнала (Этап ${stage.stage_number})`,
-                                            data: minimaData.map(m => ({
+                                            data: minimaDataForChart.map(m => ({
                                                 x: m.position,
                                                 y: m.amplitude
                                             })),

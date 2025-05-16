@@ -7,7 +7,12 @@ window.app = {
     isSaving: false,
     equipmentManager: null, // Добавляем ссылку на менеджер оборудования
     arduinoModuleLoaded: typeof window.EquipmentManager !== 'undefined', // Инициализируем исходя из доступности класса
-    initializationAttempted: false // Добавляем флаг попытки инициализации
+    initializationAttempted: false, // Добавляем флаг попытки инициализации
+    currentParams: {
+        temperature_celsius: 20,
+        pressure_pa: 101325,
+        molar_mass_kg_mol: 0.0289644
+    }
 };
 
 if (window.app.arduinoModuleLoaded) {
@@ -318,32 +323,38 @@ async function handleWebSocketMessage(data) {
                 await handleMinimaData(data);
                 break;
                 
-            case 'parameters_updated':
-                await handleParametersUpdated(data);
+            case 'parameters_updated_ack':
+                await handleParametersUpdated(data); 
                 break;
                 
-            case 'experiment_complete':
-                await handleExperimentComplete(data);
+            case 'experiment_completed': 
+                await handleExperimentComplete(data); 
                 break;
             
-            case 'step_confirmation': // Обработка подтверждения от сервера
+            case 'step_confirmation': 
                 console.log('[WS] Получено подтверждение шага от сервера:', data);
-                // Можно добавить логику реакции на это, если необходимо
                 break;
 
-            case 'recording_started': // Обработка начала записи от сервера
+            case 'recording_started': 
                 console.log('[WS] Сервер подтвердил начало записи для шага:', data.step);
-                // Можно обновить UI здесь, если нужно
                 break;
 
-            case 'recording_stopped': // Обработка остановки записи от сервера
+            case 'recording_stopped': 
                 console.log('[WS] Сервер подтвердил остановку записи для шага:', data.step);
-                // Можно обновить UI здесь, если нужно
                 break;
             
-            case 'error': // Обработка ошибок от сервера
+            case 'error': // <<---- ДОБАВЛЕНА ОБРАБОТКА ОШИБОК ЗДЕСЬ
                 console.error('[WS] Получена ошибка от сервера:', data.message);
                 showAlert(`Ошибка от сервера (шаг ${data.step || 'N/A'}): ${data.message}`, 'danger');
+                // Сбрасываем флаг сохранения и разблокируем кнопки, если была ошибка от сервера
+                window.app.isSaving = false;
+                const completeBtn = document.getElementById('completeExperimentBtn');
+                if (completeBtn) completeBtn.disabled = false;
+                document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
+                // Если ошибка связана с завершением эксперимента, вернуть текст кнопки
+                if (data.context === 'complete_experiment' && completeBtn) {
+                     completeBtn.innerHTML = '<i class="bi bi-flag-fill"></i> Завершить эксперимент';
+                }
                 break;
 
             default:
@@ -352,41 +363,55 @@ async function handleWebSocketMessage(data) {
     } catch (error) {
         console.error('[WS] Ошибка обработки сообщения:', error);
         showAlert('Ошибка обработки данных: ' + error.message, 'danger');
+        // Также сбросить флаг и кнопки в случае внутренней ошибки обработки
+        window.app.isSaving = false;
+        const completeBtnGlobal = document.getElementById('completeExperimentBtn');
+        if (completeBtnGlobal) completeBtnGlobal.disabled = false;
+        document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
     }
 }
 
 // Обработчик обновления параметров
 async function handleParametersUpdated(data) {
-    console.log('[WS] Обработка обновления параметров:', data);
-    
-    try {
-        // Обновляем значения в форме
-        const temperatureInput = document.getElementById('temperatureInput');
-        if (temperatureInput && data.data.temperature) {
-            temperatureInput.value = data.data.temperature;
-        }
+    console.log('[WS]: Received parameters_updated_ack:', data);
+    window.app.isSaving = false; // Сброс флага сохранения
+    // Разблокируем кнопки после получения ответа
+    const completeBtn = document.getElementById('completeExperimentBtn');
+    if (completeBtn) completeBtn.disabled = false;
+    document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
+
+
+    if (data.status === 'success') {
+        showAlert('Параметры успешно обновлены!', 'success');
         
-        // Обновляем частоты для каждого этапа
-        if (data.data.frequencies) {
-            const frequencyInputs = document.querySelectorAll('.stage-freq');
-            data.data.frequencies.forEach((freq, index) => {
-                if (frequencyInputs[index]) {
-                    frequencyInputs[index].value = freq;
-                }
-            });
+        // Обновляем глобальные параметры, если они пришли
+        if (data.params) {
+            if (data.params.temperature_celsius !== undefined) {
+                window.app.currentTemperature = parseFloat(data.params.temperature_celsius);
+                const tempField = document.getElementById('temperature');
+                if (tempField) tempField.value = window.app.currentTemperature;
+                console.log('[WS handleParametersUpdated] Глобальная температура обновлена:', window.app.currentTemperature);
+            }
+            // TODO: Добавить обновление других глобальных параметров, если они есть в data.params
+            // updateGlobalExperimentParamsInUI(data.params); // Закомментировано из-за ошибки
         }
-        
-        // Обновляем текущий шаг
-        if (data.data.current_step) {
-            window.app.currentStep = data.data.current_step;
-            console.log('[WS handleParametersUpdated] Установлен текущий шаг:', window.app.currentStep);
+
+        // Обновляем UI для текущего обработанного шага, если информация пришла
+        if (data.current_step_processed) {
+            console.log('[WS handleParametersUpdated] Сервер обработал шаг:', data.current_step_processed);
+            // updateUIForCurrentStep(data.current_step_processed); // Закомментировано из-за ошибки
+        } else if (data.message) {
+            console.log('[WS handleParametersUpdated] Сообщение от сервера:', data.message);
         }
-        
-        showAlert('Параметры эксперимента обновлены сервером', 'info');
-    } catch (error) {
-        console.error('[WS] Ошибка обновления параметров:', error);
-        showAlert('Ошибка обновления параметров: ' + error.message, 'warning');
+
+    } else if (data.status === 'error') {
+        showAlert(`Ошибка обновления параметров: ${data.message}`, 'danger');
+        console.error('[WS handleParametersUpdated] Ошибка:', data.message, data.details);
+    } else if (data.message) { // Обработка информационных сообщений без явного статуса success/error
+        console.log('[WS handleParametersUpdated] Информационное сообщение от сервера:', data.message);
+        // showAlert(data.message, 'info'); // Можно раскомментировать, если нужно показывать эти сообщения
     }
+    // Дополнительная логика по необходимости, например, обновить график или таблицу特定 шага
 }
 
 // Обработчик завершения эксперимента
@@ -422,27 +447,81 @@ async function handleExperimentComplete(data) {
 
 // Обработчик данных минимумов
 async function handleMinimaData(data) {
-    console.log('[WS] Получены данные минимумов:', data);
-    
     try {
-        const canvasId = `chart-step-${data.step}`;
-        const canvas = document.getElementById(canvasId);
-        
-        if (!canvas) {
-            console.error(`[WS handleMinimaData] Canvas ${canvasId} не найден`);
-            throw new Error(`Canvas ${canvasId} не найден`);
+        console.log('[WS handleMinimaData] Обработка данных минимумов:', data);
+        console.log('[WS handleMinimaData] Структура data.minima:', JSON.stringify(data.minima, null, 2));
+
+        if (!data || !data.minima || !data.step) {
+            console.error('[WS handleMinimaData] Некорректные данные минимумов или отсутствует номер шага:', data);
+            return;
+        }
+
+        const stepIndex = parseInt(data.step, 10) - 1;
+        if (stepIndex < 0 || stepIndex >= window.app.stepsData.length) {
+            console.error('[WS handleMinimaData] Неверный номер шага:', data.step);
+            return;
+        }
+
+        // ИЗМЕНЕНО: Извлекаем позиции из m.distance_m
+        // ИЗМЕНЕНО: Генерируем labels (номера k) как индекс + 1
+        const positions = data.minima.map(m => m.distance_m); 
+        const labels = data.minima.map((m, index) => index + 1); // Генерируем k = 1, 2, 3...
+
+        if (!window.app.stepsData[stepIndex]) {
+            window.app.stepsData[stepIndex] = {};
         }
         
-        if (typeof renderMinimaChart === 'function') {
-            await renderMinimaChart(data.minima, data.step, data.frequency);
-            console.log('[WS handleMinimaData] График успешно обновлен для шага', data.step);
+        window.app.stepsData[stepIndex].data = positions;   // Массив Lk в метрах
+        window.app.stepsData[stepIndex].labels = labels; // Массив номеров k
+        window.app.stepsData[stepIndex].rawMinima = data.minima; // Сохраняем исходные данные для отладки или графиков
+
+        console.log(`[WS handleMinimaData] Шаг ${data.step}: Сохранены positions:`, positions, "и labels:", labels, "в stepsData:", JSON.parse(JSON.stringify(window.app.stepsData[stepIndex])));
+        
+        // Обновление графика (если есть)
+        const chartId = `chart-step-${data.step}`;
+        const chartElement = document.getElementById(chartId);
+        
+        if (chartElement) {
+            // ИЗМЕНЕНО: Используем m.distance_m для оси X графика
+            const chartDataPoints = data.minima.map(m => ({
+                x: m.distance_m, 
+                y: m.amplitude  
+            }));
+
+            if (window.charts && window.charts[chartId]) {
+                window.charts[chartId].data.datasets[0].data = chartDataPoints;
+                window.charts[chartId].update();
+                console.log(`[WS handleMinimaData] График ${chartId} обновлен.`);
+            } else {
+                console.log(`[WS handleMinimaData] Логика для создания нового графика ${chartId} здесь не реализована, но данные подготовлены.`);
+            }
         } else {
-            console.error('[WS handleMinimaData] Функция renderMinimaChart не найдена');
-            throw new Error('Функция renderMinimaChart не найдена');
+            console.warn(`[WS handleMinimaData] Элемент графика ${chartId} не найден.`);
         }
+        
+        // Обновление списка минимумов в UI
+        const minimaListId = `minima-list-step-${data.step}`;
+        const minimaListElement = document.getElementById(minimaListId);
+        if (minimaListElement) {
+            minimaListElement.innerHTML = ''; 
+            if (data.minima.length > 0) {
+                const ul = document.createElement('ul');
+                ul.className = 'list-group list-group-flush';
+                // ИЗМЕНЕНО: Используем m.distance_m и генерируемый индекс+1 для метки
+                data.minima.forEach((m, index) => {
+                    const li = document.createElement('li');
+                    li.className = 'list-group-item py-1 px-0 small';
+                    li.textContent = `Метка: ${index + 1}, Позиция: ${m.distance_m.toFixed(3)} м, Амплитуда: ${m.amplitude.toExponential(2)}`;
+                    ul.appendChild(li);
+                });
+                minimaListElement.appendChild(ul);
+            } else {
+                minimaListElement.innerHTML = '<p class="text-muted small">Минимумы не найдены.</p>';
+            }
+        }
+        // console.log(`[WS handleMinimaData] График успешно обновлен для шага ${data.step}`); 
     } catch (error) {
-        console.error('[WS] Ошибка обработки данных минимумов:', error);
-        showAlert('Ошибка при обновлении графика: ' + error.message, 'warning');
+        console.error('[WS handleMinimaData] Ошибка при обработке данных минимумов:', error, 'Данные:', data);
     }
 }
 
@@ -983,42 +1062,11 @@ function initializeEventHandlers() {
     const saveParamsBtn = document.getElementById('saveParamsBtn');
     if (saveParamsBtn) {
         saveParamsBtn.addEventListener('click', async () => {
-            console.log('[APP EvtHandlers] Нажата кнопка "Сохранить параметры".');
-            try {
-                // Собираем все параметры и отправляем их на сервер
-                // Это может быть полезно, если параметры менялись, но запись не производилась
-                const temperature = parseFloat(document.getElementById('temperatureInput').value);
-                if (isNaN(temperature)) throw new Error('Некорректное значение температуры.');
-
-                const paramsToSend = {
-                    type: 'update_all_params', // Новый тип сообщения для сервера
-                    temperature: temperature,
-                    stages: []
-                };
-
-                const freqInputs = document.querySelectorAll('.stage-freq');
-                freqInputs.forEach((input, index) => {
-                    const freq = parseFloat(input.value);
-                    if (isNaN(freq)) throw new Error(`Некорректная частота для этапа ${index + 1}.`);
-                    paramsToSend.stages.push({
-                        step: index + 1,
-                        frequency: freq,
-                        temperature: temperature // Используем общую температуру
-                    });
-                });
-                
-                if (window.app.ws && window.app.ws.readyState === WebSocket.OPEN) {
-                    window.app.ws.send(JSON.stringify(paramsToSend));
-                    showAlert('Параметры отправлены на сервер.', 'success');
-                    console.log('[APP EvtHandlers] Параметры (update_all_params) отправлены:', paramsToSend);
-                } else {
-                    throw new Error('WebSocket не подключен для сохранения параметров.');
-                }
-
-            } catch (error) {
-                console.error('[APP EvtHandlers] Ошибка при сохранении параметров:', error);
-                showAlert('Ошибка сохранения параметров: ' + error.message, 'danger');
-            }
+            console.log('[APP EvtHandlers] Нажата кнопка "Сохранить параметры". Вызываем sendExperimentParams.');
+            // Используем существующую функцию sendExperimentParams, которая корректно собирает все данные, включая минимумы.
+            // false означает, что это не завершение эксперимента.
+            // sendExperimentParams сама обработает блокировку/разблокировку кнопок и флаг isSaving.
+            await sendExperimentParams(window.app.currentStep, false); 
         });
     }
 
@@ -1026,37 +1074,29 @@ function initializeEventHandlers() {
     const completeExperimentBtn = document.getElementById('completeExperimentBtn');
     if (completeExperimentBtn) {
         completeExperimentBtn.addEventListener('click', async () => {
-            console.log('[APP EvtHandlers] Нажата кнопка "Завершить эксперимент".');
-             if (window.app.isSaving) {
-                showAlert('Сохранение уже идет...', 'info');
+            console.log('[APP EvtHandlers] Нажата кнопка "Завершить эксперимент". Вызываем sendExperimentParams с isCompleting=true.');
+            
+            if (window.app.isSaving) {
+                showAlert('Сохранение или завершение уже идет...', 'info');
                 return;
             }
-            if (!confirm('Вы уверены, что хотите завершить эксперимент? Все несохраненные данные для активных этапов могут быть потеряны.')) {
+            if (!confirm('Вы уверены, что хотите завершить эксперимент? Убедитесь, что все необходимые данные сохранены.')) {
                 return;
             }
 
-            window.app.isSaving = true;
-            completeExperimentBtn.disabled = true;
-            completeExperimentBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Завершение...';
+            // Устанавливаем флаг и состояние кнопки здесь, т.к. sendExperimentParams может вернуть управление до ответа сервера
+            // (хотя handleParametersUpdated/handleExperimentComplete должны сбросить isSaving и разблокировать кнопки)
+            // window.app.isSaving = true; // sendExperimentParams это сделает
+            // completeExperimentBtn.disabled = true; // sendExperimentParams это сделает
+            // completeExperimentBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Завершение...'; // sendExperimentParams не меняет текст при отправке
 
-            try {
-                if (window.app.ws && window.app.ws.readyState === WebSocket.OPEN) {
-                    window.app.ws.send(JSON.stringify({ type: 'finalize_experiment' })); // Новый тип сообщения
-                    console.log('[APP EvtHandlers] Отправлена команда finalize_experiment на сервер.');
-                    // Сервер должен ответить сообщением experiment_complete или ошибкой
-                    // UI обновится при получении experiment_complete
-                } else {
-                    throw new Error('WebSocket не подключен для завершения эксперимента.');
-                }
-            } catch (error) {
-                 console.error('[APP EvtHandlers] Ошибка при отправке команды завершения эксперимента:', error);
-                showAlert('Ошибка завершения эксперимента: ' + error.message, 'danger');
-                completeExperimentBtn.disabled = false;
-                completeExperimentBtn.innerHTML = '<i class="bi bi-flag-fill"></i> Завершить эксперимент';
-            } finally {
-                window.app.isSaving = false; 
-                // Не сбрасываем disabled здесь, ждем ответа от сервера или таймаута
-            }
+            // true означает, что это завершение эксперимента.
+            // sendExperimentParams отправит сообщение type: 'complete_experiment' со всеми данными.
+            await sendExperimentParams(window.app.currentStep, true);
+            
+            // Текст и состояние кнопки "Завершить эксперимент" должны обновиться 
+            // при получении сообщения 'experiment_completed' от сервера (в функции handleExperimentComplete).
+            // Не сбрасываем isSaving здесь, это сделает handleExperimentComplete или handleParametersUpdated.
         });
     }
     
@@ -1123,61 +1163,127 @@ function getCookie(name) {
 window.initializeApp = initializeApp;
 
 // Функция отправки параметров эксперимента
-async function sendExperimentParams(step) {
-    try {
-        console.log(`[APP sendExperimentParams] Отправка параметров для шага ${step}.`);
-        const stageCard = document.querySelector(`.record-btn[data-stage="${step}"]`).closest('.stage-card');
-        if (!stageCard) {
-            throw new Error(`Не найден stage-card для этапа ${step}`);
-        }
+async function sendExperimentParams(step, isCompleting = false) {
+    if (window.app.isSaving) {
+        console.warn('[APP sendExperimentParams] Предыдущее сохранение еще не завершено. Отмена.');
+        showAlert('Идет сохранение, пожалуйста, подождите...', 'warning');
+        return;
+    }
 
-        const frequencyInput = stageCard.querySelector('.stage-freq');
-        const temperatureInput = document.getElementById('temperatureInput');
-        
-        // Данные для текущего шага
-        const currentFrequency = parseFloat(frequencyInput?.value); // Уже должно быть установлено
-        const currentTemperature = parseFloat(temperatureInput?.value); // Уже должно быть установлено
-        
-        if (isNaN(currentFrequency) || currentFrequency <= 0) {
-            console.error(`[APP sendExperimentParams] Некорректная частота для шага ${step}: ${frequencyInput?.value}`);
-            throw new Error('Частота должна быть положительным числом.');
-        }
-        
-        if (isNaN(currentTemperature) || currentTemperature < 10 || currentTemperature > 40) {
-             console.error(`[APP sendExperimentParams] Некорректная температура: ${temperatureInput?.value}`);
-            throw new Error('Температура должна быть в диапазоне от 10 до 40°C.');
-        }
-        
-        // Обновляем stepsData (хотя это должно было произойти при изменении полей)
-        if (window.app.stepsData[step - 1]) {
-            window.app.stepsData[step - 1].frequency = currentFrequency;
-            window.app.stepsData[step - 1].temperature = currentTemperature;
-        } else {
-            console.warn(`[APP sendExperimentParams] stepsData[${step-1}] не найден для обновления.`);
-        }
-        console.log(`[APP sendExperimentParams] Обновленные stepsData для шага ${step}:`, JSON.parse(JSON.stringify(window.app.stepsData[step - 1])));
-        console.log('[APP sendExperimentParams] Текущие все stepsData:', JSON.parse(JSON.stringify(window.app.stepsData)));
+    window.app.isSaving = true;
+    console.log(`[APP sendExperimentParams] Подготовка данных. Текущий шаг: ${step}. Завершение: ${isCompleting}`);
 
-        const params = {
-            type: 'experiment_params',
-            step: step,
-            frequency: currentFrequency,
-            temperature: currentTemperature
-        };
-        
-        console.log('[APP sendExperimentParams] Отправка параметров (experiment_params) на сервер:', params);
-        
-        if (window.app.ws && window.app.ws.readyState === WebSocket.OPEN) {
-            window.app.ws.send(JSON.stringify(params));
-            console.log('[APP sendExperimentParams] Параметры успешно отправлены.');
-        } else {
-            console.error('[APP sendExperimentParams] WebSocket соединение не установлено. Невозможно отправить параметры.');
-            throw new Error('WebSocket соединение не установлено.');
+    // Блокируем кнопки на время сохранения
+    const completeBtn = document.getElementById('completeExperimentBtn');
+    if (completeBtn) completeBtn.disabled = true;
+    document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = true);
+
+
+    const currentStepData = window.app.stepsData[step - 1];
+    console.log(`[APP sendExperimentParams] Данные для текущего этапа (window.app.stepsData[${step-1}]):`, currentStepData);
+
+    if (!currentStepData) {
+        console.error(`[APP sendExperimentParams] Нет данных для этапа ${step}`);
+        window.app.isSaving = false;
+        if (completeBtn) completeBtn.disabled = false;
+        document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
+        return;
+    }
+
+    // Общие параметры эксперимента
+    // Убедимся, что температура берется из глобального состояния, если не задана для шага.
+    // Обычно температура глобальна для всего эксперимента.
+    const temperatureInput = document.getElementById('temperature');
+    let globalTemperature;
+
+    if (temperatureInput && temperatureInput.value !== "") {
+        const parsedTemp = parseFloat(temperatureInput.value);
+        if (!Number.isNaN(parsedTemp)) {
+            globalTemperature = parsedTemp;
         }
-    } catch (error) {
-        console.error('[APP sendExperimentParams] Ошибка отправки experiment_params:', error);
-        showAlert('Ошибка отправки параметров на сервер: ' + error.message, 'danger');
-        throw error; // Важно пробросить ошибку, чтобы вызывающая функция (например, обработчик кнопки записи) знала о проблеме
+    }
+
+    // Если globalTemperature все еще не определена (например, поле ввода пустое или значение невалидно)
+    if (typeof globalTemperature === 'undefined') {
+        if (window.app && typeof window.app.currentTemperature === 'number' && !Number.isNaN(window.app.currentTemperature)) {
+            globalTemperature = window.app.currentTemperature;
+            console.log(`[APP sendExperimentParams] Используем window.app.currentTemperature: ${globalTemperature}`);
+        } else if (window.app && window.app.stepsData && window.app.stepsData.length > 0 && typeof window.app.stepsData[0].temperature === 'number' && !Number.isNaN(window.app.stepsData[0].temperature)) {
+            // Дополнительный fallback на температуру первого шага, если currentTemperature не определена
+            globalTemperature = window.app.stepsData[0].temperature;
+            console.log(`[APP sendExperimentParams] Используем температуру из stepsData[0]: ${globalTemperature}`);
+        } else {
+            globalTemperature = 20; // Абсолютный fallback
+            console.log(`[APP sendExperimentParams] Используем абсолютное значение по умолчанию для температуры: ${globalTemperature}`);
+        }
+    }
+
+    // Значения по умолчанию, если не найдены в DOM или window.app
+    const pressurePa = parseFloat(document.getElementById('pressure_pa')?.value) || 101325; // Паскали
+    const molarMassKgMol = parseFloat(document.getElementById('molar_mass_kg_mol')?.value) || 0.0289644; // кг/моль
+
+    console.log("[APP sendExperimentParams] Глобальные параметры для отправки:", { temp: globalTemperature, pressure: pressurePa, molar_mass: molarMassKgMol });
+
+
+    let payload = {
+        type: isCompleting ? 'complete_experiment' : 'update_all_params',
+        experiment_id: parseInt(window.EXPERIMENT_ID, 10),
+        temperature: globalTemperature, // Используем глобальную температуру
+        pressure_pa: pressurePa,
+        molar_mass_kg_mol: molarMassKgMol,
+        stages: []
+    };
+
+    // Собираем данные всех этапов, для которых есть информация
+    for (let i = 0; i < window.app.stepsData.length; i++) {
+        const stage = window.app.stepsData[i];
+        const stepNum = i + 1;
+
+        // Этап считается "активным" или "заполненным", если есть частота И данные (минимумы)
+        // Или если это текущий этап, для которого могут обновляться только параметры без минимумов (например, только частота)
+        // или если это этап, для которого принудительно указано, что он должен быть отправлен (например, при завершении)
+        
+        // Для 'update_all_params' отправляем только те этапы, где есть данные минимумов и частота
+        // Для 'complete_experiment' (isCompleting=true) можем отправлять все этапы,
+        // даже если нет минимумов, но есть частота (сервер разберется)
+        // Однако, для консистентности и учитывая логику сервера, лучше всегда проверять наличие ключевых данных.
+
+        if (stage.frequency && stage.data && stage.data.length > 0) {
+            let stagePayload = {
+                step_number: stepNum,
+                frequency: stage.frequency, // <--- ДОБАВЛЕНО ЭТО ПОЛЕ
+                data: stage.data,       // positions
+                labels: stage.labels    // k_values
+            };
+            if (stage.rawMinima) { // Добавляем, если есть
+                stagePayload.raw_minima_data = stage.rawMinima;
+            }
+            payload.stages.push(stagePayload);
+            console.log(`[APP sendExperimentParams] Этап ${stepNum} добавлен в payload.stages:`, stagePayload);
+        } else {
+            console.log(`[APP sendExperimentParams] Этап ${stepNum} пропущен (нет частоты и/или минимумов). Данные этапа:`, stage);
+        }
+    }
+
+    if (payload.stages.length === 0 && !isCompleting) {
+        console.warn("[APP sendExperimentParams] Нет данных в payload.stages для update_all_params. Отправка отменена.");
+        showAlert('Нет данных для сохранения. Заполните хотя бы один этап.', 'warning');
+        window.app.isSaving = false;
+        if (completeBtn) completeBtn.disabled = false;
+        document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
+        return;
+    }
+    
+    if (window.app.ws && window.app.ws.readyState === WebSocket.OPEN) {
+        console.log('[WS]: Sending experiment params:', payload);
+        window.app.ws.send(JSON.stringify(payload));
+        // Не сбрасываем isSaving и не разблокируем кнопки здесь, ждем ответа от сервера (parameters_updated_ack или experiment_completed)
+    } else {
+        console.error('[WS]: WebSocket не подключен. Невозможно отправить параметры.');
+        showAlert('Ошибка: WebSocket не подключен.', 'danger');
+        window.app.isSaving = false; // Сброс флага, так как отправки не было
+        if (completeBtn) completeBtn.disabled = false;
+        document.querySelectorAll('.save-params-btn').forEach(btn => btn.disabled = false);
     }
 }
 
