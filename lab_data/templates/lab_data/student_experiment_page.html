@@ -96,6 +96,18 @@
                     const debugSystemGammaEl = document.getElementById('debug-system-gamma');
                     const debugStagesDetailsEl = document.getElementById('debug-stages-details');
 
+                    // --- НАЧАЛО ИЗМЕНЕНИЯ: Обновление заголовка отладочной информации ---
+                    const debugHeaderSpan = debugInfoContainer.querySelector('h5 > span.badge');
+                    if (debugHeaderSpan) {
+                        if (data.results_processing_status === 'success' || data.experiment_status_raw === 'completed') {
+                            debugHeaderSpan.textContent = 'Завершен';
+                            debugHeaderSpan.classList.remove('bg-warning');
+                            debugHeaderSpan.classList.add('bg-success');
+                        }
+                        // Если не выполнены условия выше, заголовок останется "Отладочная информация" с классом bg-warning
+                    }
+                    // --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
                     if (data.debug_mode_for_student_profile) {
                         debugInfoContainer.style.display = 'block';
                         
@@ -253,43 +265,81 @@
 
         studentResultsForm.addEventListener('submit', function(event) {
             event.preventDefault();
-            formMessageEl.textContent = '';
-            formMessageEl.className = 'mt-3';
+            formMessageEl.textContent = ''; // Очищаем предыдущие сообщения
+            formMessageEl.className = 'mt-3'; // Сбрасываем классы
 
-            const formData = new FormData(studentResultsForm);
+            const formData = new FormData(studentResultsForm); // Используем FormData для CSRF и значений
             const studentSpeed = formData.get('student_speed');
             const studentGamma = formData.get('student_gamma');
 
-            fetch(`/lab_data/api/experiment/${experimentId}/save-results/`, {
+            // Исправленный URL: убираем /lab_data в начале
+            fetch(`/api/experiment/${experimentId}/save-results/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRFToken': formData.get('csrfmiddlewaretoken') 
+                    'X-CSRFToken': formData.get('csrfmiddlewaretoken') // CSRF из скрытого поля формы
                 },
                 body: JSON.stringify({
-                    student_speed: parseFloat(studentSpeed),
-                    student_gamma: parseFloat(studentGamma)
+                    student_speed: studentSpeed ? parseFloat(studentSpeed) : null, // Преобразуем в число или null
+                    student_gamma: studentGamma ? parseFloat(studentGamma) : null  // Преобразуем в число или null
                 })
             })
-            .then(response => response.json())
+            .then(response => response.json()) // Ожидаем JSON в любом случае
             .then(data => {
                 if (data.status === 'success') {
                     formMessageEl.textContent = 'Ваши результаты успешно отправлены! ' + (data.message || '');
-                    formMessageEl.classList.add('alert', 'alert-success');
-                    studentResultsForm.reset();
+                    formMessageEl.className = 'alert alert-success mt-3';
+                    // studentResultsForm.reset(); // Можно раскомментировать, если нужно очищать форму
+                    
                     const submitButton = studentResultsForm.querySelector('button[type="submit"]');
-                    if (submitButton) {
-                        submitButton.disabled = true;
+                    const retryButtonContainer = document.getElementById('retry-button-container');
+
+
+                    if (data.results_status === 'fail') {
+                        if (data.comparison_message) {
+                            formMessageEl.innerHTML += `<br>${data.comparison_message}`; // Используем innerHTML для <br>
+                        }
+                        if (submitButton) submitButton.disabled = false; // Разблокируем кнопку отправки
+
+                        if (retryButtonContainer) {
+                             // Показываем контейнер и кнопку (если кнопка уже там)
+                            retryButtonContainer.style.display = 'block';
+                            // Если кнопки "Пересдать" еще нет, ее можно создать и добавить сюда
+                            // или предполагаем, что она уже есть в HTML и просто скрыта.
+                            // Пример создания кнопки, если ее нет:
+                            // if (!document.getElementById('retry-experiment-button')) {
+                            //    const retryBtn = document.createElement('a');
+                            //    retryBtn.href = `/lab_data/experiment/${experimentId}/retry/`;
+                            //    retryBtn.className = 'btn btn-warning mt-2';
+                            //    retryBtn.id = 'retry-experiment-button';
+                            //    retryBtn.textContent = 'Пересдать эксперимент';
+                            //    retryButtonContainer.appendChild(retryBtn);
+                            // }
+                        }
+                         // Показываем кнопку "Пересдать" (предполагая, что она есть и имеет ID 'retry-experiment-button')
+                        const retryBtnElement = document.getElementById('retry-experiment-button');
+                        if (retryBtnElement) {
+                            retryBtnElement.style.display = 'inline-block';
+                        }
+
+
+                    } else if (data.results_status === 'success'){
+                        if (submitButton) submitButton.disabled = true; // Блокируем кнопку после успешной сдачи
+                        if (retryButtonContainer) retryButtonContainer.style.display = 'none'; // Скрываем кнопку "Пересдать"
+                        const retryBtnElement = document.getElementById('retry-experiment-button');
+                        if (retryBtnElement) {
+                             retryBtnElement.style.display = 'none';
+                        }
                     }
                 } else {
                     formMessageEl.textContent = 'Ошибка при отправке: ' + (data.message || 'Проверьте введенные данные.');
-                    formMessageEl.classList.add('alert', 'alert-danger');
+                    formMessageEl.className = 'alert alert-danger mt-3';
                 }
             })
             .catch(error => {
+                formMessageEl.textContent = 'Сетевая ошибка или ошибка сервера при отправке результатов. Проверьте консоль для деталей.';
+                formMessageEl.className = 'alert alert-danger mt-3';
                 console.error('Error submitting results:', error);
-                formMessageEl.textContent = 'Сетевая ошибка или ошибка сервера при отправке результатов.';
-                formMessageEl.classList.add('alert', 'alert-danger');
             });
         });
     });

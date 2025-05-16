@@ -313,28 +313,49 @@ def experiment_results(request, experiment_id):
 @login_required
 def retry_experiment(request, experiment_id: int) -> HttpResponse:
     """
-    Сброс эксперимента для повторного прохождения.
+    Сброс попытки студента для эксперимента для повторного ввода результатов.
+    Не удаляет сам эксперимент или его данные, только предыдущий ввод студента.
 
     Args:
         request: HttpRequest объект
         experiment_id: ID эксперимента
 
     Returns:
-        HttpResponse: Редирект на home
+        HttpResponse: Редирект на страницу эксперимента
     """
     experiment = get_object_or_404(Experiments, id=experiment_id)
     if experiment.user != request.user:
         logger.warning(
-            f"User {request.user.email} tried to retry experiment {experiment_id} without permission"
+            f"User {request.user.email} tried to reset attempt for experiment {experiment_id} without permission"
         )
         raise PermissionDenied
 
-    logger.info(f"Resetting experiment {experiment_id} by user {request.user.email}")
-    experiment.results.delete()
-    experiment.delete()
-    
-    messages.info(request, "Эксперимент сброшен. Можете начать заново.")
-    return redirect('home')
+    try:
+        results_entry = Results.objects.get(experiment=experiment)
+        
+        # Сброс полей, относящихся к предыдущей попытке студента
+        results_entry.student_gamma = None
+        results_entry.student_speed = None
+        results_entry.error_percent = None
+        results_entry.status = 'pending_student_input' # Возвращаем статус для нового ввода
+        results_entry.save()
+        
+        logger.info(f"Student's attempt for experiment {experiment_id} (Results ID: {results_entry.id}) has been reset by user {request.user.email}.")
+        messages.success(request, "Ваша предыдущая попытка сброшена. Вы можете ввести рассчитанные значения заново.")
+        
+        # Редирект обратно на страницу деталей эксперимента
+        return redirect('student_experiment_detail', experiment_id=experiment.id)
+
+    except Results.DoesNotExist:
+        logger.error(f"No Results entry found for experiment {experiment_id} when trying to reset attempt. This may happen if results were never submitted or an error occurred.")
+        messages.error(request, "Не удалось найти данные для сброса попытки. Возможно, результаты еще не были отправлены.")
+        # Если записи Results нет, возможно, стоит просто перенаправить на страницу эксперимента,
+        # где студент сможет ввести данные в первый раз.
+        return redirect('student_experiment_detail', experiment_id=experiment.id)
+    except Exception as e:
+        logger.error(f"Error resetting student's attempt for experiment {experiment_id}: {str(e)}", exc_info=True)
+        messages.error(request, "Произошла ошибка при сбросе вашей попытки. Пожалуйста, попробуйте снова или обратитесь к администратору.")
+        return redirect('student_experiment_detail', experiment_id=experiment.id)
 
 
 class DownloadManualView(View):
@@ -414,57 +435,87 @@ def save_experiment_results(request, experiment_id):
         results_entry.student_speed = student_speed
         results_entry.student_gamma = student_gamma
 
-        # Расчет погрешности.
-        # Сравниваем student_gamma с results_entry.gamma_calculated (системно рассчитанное значение).
-        system_gamma = results_entry.gamma_calculated
-        error_percent_gamma = None
+        # system_gamma должен быть уже в results_entry.gamma_calculated
+        # Если он там по какой-то причине отсутствует, то расчет ошибки будет некорректен.
+        current_system_gamma = results_entry.gamma_calculated 
+        error_percent_calculated = None
 
-        if system_gamma is not None and system_gamma != 0:
-            error_percent_gamma = abs((student_gamma - system_gamma) / system_gamma) * 100
-            results_entry.error_percent = round(error_percent_gamma, 2)
+        if current_system_gamma is not None and current_system_gamma != 0:
+            calculated_error = abs((student_gamma - current_system_gamma) / current_system_gamma) * 100
+            error_percent_calculated = round(calculated_error, 2)
         else:
-            # Если системная гамма не рассчитана или равна 0, ошибку корректно посчитать нельзя.
-            # Можно установить error_percent в None или обработать как особый случай.
-            results_entry.error_percent = None 
-            logger.warning(f"System gamma for experiment {experiment_id} is None or zero. Cannot calculate error.")
+            logger.warning(f"System gamma (results_entry.gamma_calculated) for experiment {experiment_id} is {current_system_gamma}. Cannot calculate error percentage.")
+            # error_percent_calculated остается None
+
+        results_entry.error_percent = error_percent_calculated # Присваиваем рассчитанное значение или None
 
         # Определение статуса на основе погрешности гаммы
         ACCEPTABLE_ERROR_PERCENT = 5.0 
-        if error_percent_gamma is not None and error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT:
-            results_entry.status = 'success' # Успешно, в пределах нормы
-        elif error_percent_gamma is not None: # Ошибка есть и она больше порога
-            results_entry.status = 'fail' # Неудача, большая погрешность
+        if error_percent_calculated is not None:
+            if error_percent_calculated <= ACCEPTABLE_ERROR_PERCENT:
+                results_entry.status = 'success'
+            else:
+                results_entry.status = 'fail'
         else:
-            # Если error_percent_gamma is None (например, system_gamma некорректна),
-            # статус может остаться 'pending_student_input' или стать специфическим статусом ошибки расчета.
-            # Для простоты пока оставим как есть, но это место для возможного улучшения логики.
-            # Если лаборант не завершил расчеты system_gamma, то студент не должен страдать.
-            # Возможно, стоит вернуть ошибку, что системные данные не готовы.
-            # Пока что, если system_gamma нет, results_entry.status не изменится от 'pending_student_input'.
-            pass # Статус не меняем, если ошибка не рассчитана
-        
-        results_entry.save()
-        
-        logger.info(f"Студент {request.user.email} сохранил результаты для эксперимента {experiment_id}. "
-                    f"Student Gamma: {student_gamma}, System Gamma: {system_gamma}, Error: {results_entry.error_percent}%, Status: {results_entry.status}")
-        
+            # Если ошибка не была рассчитана (например, current_system_gamma был 0 или None),
+            # статус не должен автоматически становиться 'success' или 'fail' на основе ошибки.
+            # Оставляем статус как есть (вероятно 'pending_student_input') или устанавливаем
+            # специфический статус, если это требуется.
+            # В вашем случае, если system_gamma не было, логгирование уже есть.
+            # results_entry.status = 'error_system_data_missing' # Пример
+            pass # Не меняем статус, если ошибка не посчитана
+
+        results_entry.save() # Сохраняем все изменения
+
+        # Логгирование сразу после сохранения
+        logger.info(f"Data saved for Results ID {results_entry.pk}: "
+                    f"Student Speed: {results_entry.student_speed}, "
+                    f"Student Gamma: {results_entry.student_gamma}, "
+                    f"System Gamma (gamma_calculated): {results_entry.gamma_calculated}, "
+                    f"Error Percent: {results_entry.error_percent}, "
+                    f"Status: {results_entry.status}")
+
+        # --- НАЧАЛО ИЗМЕНЕНИЯ: Копирование данных в Experiment ---
+        if experiment:
+            experiment.student_speed = results_entry.student_speed
+            experiment.student_gamma = results_entry.student_gamma
+            experiment.system_gamma = results_entry.gamma_calculated # Копируем системную гамму
+            experiment.error_percent = results_entry.error_percent
+            
+            # === Новая логика для статуса эксперимента ===
+            if results_entry.status == 'success':
+                experiment.status = 'completed' # Устанавливаем статус "Завершен" для эксперимента
+                logger.info(f"Experiment ID {experiment.id} status changed to 'completed' due to successful student results.")
+            # === Конец новой логики ===
+            
+            experiment.save()
+            logger.info(f"Data copied and saved to Experiment ID {experiment.id}: "
+                        f"Student Speed: {experiment.student_speed}, "
+                        f"Student Gamma: {experiment.student_gamma}, "
+                        f"System Gamma: {experiment.system_gamma}, "
+                        f"Error Percent: {experiment.error_percent}, "
+                        f"Experiment Status: {experiment.status}") # Добавлено логирование статуса эксперимента
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
         response_payload = {
-            'status': 'success_submission', # Используем новый общий статус для успешной *отправки*
+            'status': 'success',
             'message': 'Результаты успешно сохранены!',
-            'results_status': results_entry.status, # 'success', 'fail', или 'pending_student_input' (если ошибка не считалась)
-            'error_percent_gamma': results_entry.error_percent,
+            'results_status': results_entry.status,
+            'error_percent_gamma': results_entry.error_percent, # Используем значение из сохраненного объекта
             'student_values': {
-                'gamma': student_gamma,
-                'speed': student_speed
+                'gamma': results_entry.student_gamma, # Используем значение из сохраненного объекта
+                'speed': results_entry.student_speed  # Используем значение из сохраненного объекта
             },
             'system_values': {
-                'gamma': system_gamma
-                # Добавить системную скорость, если она будет
+                'gamma': results_entry.gamma_calculated # Используем значение из сохраненного объекта
             }
         }
-        if results_entry.status == 'fail':
-            response_payload['comparison_message'] = f"Отклонение вашего значения γ ({student_gamma}) от системного ({system_gamma}) составило {results_entry.error_percent}%."
-
+        if results_entry.status == 'fail' and results_entry.error_percent is not None: # Добавил проверку на None
+            response_payload['comparison_message'] = (
+                f"Отклонение вашего значения γ ({results_entry.student_gamma}) "
+                f"от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent}%."
+            )
+        
         return JsonResponse(response_payload)
     
     except Experiments.DoesNotExist:

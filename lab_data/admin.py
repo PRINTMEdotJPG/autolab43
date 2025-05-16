@@ -122,10 +122,25 @@ class EquipmentDataAdmin(admin.ModelAdmin):
 
 @admin.register(Results)
 class ResultsAdmin(admin.ModelAdmin):
-    list_display = ('experiment', 'gamma_calculated', 'gamma_reference', 'error_percent', 'status')
+    list_display = (
+        'experiment', 
+        'student_speed',
+        'student_gamma',
+        'gamma_calculated', 
+        'gamma_reference', 
+        'error_percent', 
+        'status'
+    )
     list_filter = ('status',)
     search_fields = ('experiment__id',)
-    readonly_fields = ('experiment',)
+    readonly_fields = (
+        'experiment', 
+        'student_speed',
+        'student_gamma',
+        'gamma_calculated', 
+        'gamma_reference', 
+        'error_percent'
+    )
 
 @admin.register(Protocols)
 class ProtocolsAdmin(admin.ModelAdmin):
