@@ -29,30 +29,25 @@ let recorder = null;
 function createArduinoControls() {
     console.log('[APP] Динамическое создание элементов управления Arduino...');
     
-    // Ищем основной контейнер карточки оборудования
-    const cardBody = document.querySelector('.card .card-body');
+    const cardBody = document.querySelector('.card .card-body'); // Предполагаем, что это правильный селектор для карточки оборудования
     if (!cardBody) {
-        console.error('[APP] Не найден контейнер для элементов управления Arduino');
+        console.error('[APP] Не найден контейнер для элементов управления Arduino (cardBody). Селектор: \'.card .card-body\''); // ИСПРАВЛЕНА ОШИБКА ЛИНТЕРА
         return false;
     }
     
-    // Проверяем, нет ли уже наших контролов
     if (document.getElementById('arduinoControlsContainer')) {
         console.log('[APP] Элементы управления Arduino уже добавлены');
         return true;
     }
     
-    // Создаем контейнер для элементов управления
     const controlsContainer = document.createElement('div');
     controlsContainer.id = 'arduinoControlsContainer';
     
-    // Создаем заголовок
     const title = document.createElement('h5');
     title.className = 'card-title';
     title.textContent = 'Оборудование';
     controlsContainer.appendChild(title);
     
-    // Создаем блок статуса
     const statusBlock = document.createElement('div');
     statusBlock.className = 'd-flex justify-content-between align-items-center mb-3';
     statusBlock.innerHTML = `
@@ -61,7 +56,8 @@ function createArduinoControls() {
     `;
     controlsContainer.appendChild(statusBlock);
     
-    // Создаем форму ввода порта
+    // --- Удаляем/комментируем блок ручного ввода порта ---
+    /*
     const portInputGroup = document.createElement('div');
     portInputGroup.className = 'mb-3';
     portInputGroup.innerHTML = `
@@ -77,22 +73,21 @@ function createArduinoControls() {
         <small class="form-text text-muted">Укажите порт Arduino, например, /dev/tty.usbserial-120 или COM3</small>
     `;
     controlsContainer.appendChild(portInputGroup);
+    */
+    // --- Конец удаления/комментирования блока ---
     
-    // Создаем кнопку автоматического подключения
     const autoConnectBtn = document.createElement('button');
     autoConnectBtn.id = 'connectEquipmentBtn';
-    autoConnectBtn.className = 'btn btn-outline-primary btn-sm w-100 mb-3';
-    autoConnectBtn.innerHTML = '<i class="bi bi-usb-plug"></i> Выбрать порт автоматически';
+    autoConnectBtn.className = 'btn btn-primary btn-sm w-100 mb-3'; // Изменен класс на btn-primary для лучшего вида
+    autoConnectBtn.innerHTML = '<i class="bi bi-usb-plug"></i> Подключить Arduino'; // Изменен текст кнопки
     controlsContainer.appendChild(autoConnectBtn);
     
-    // Добавляем разделитель
     const divider = document.createElement('hr');
     controlsContainer.appendChild(divider);
     
-    // Вставляем в начало карточки
     cardBody.prepend(controlsContainer);
     
-    console.log('[APP] Элементы управления Arduino успешно добавлены');
+    console.log('[APP] Элементы управления Arduino успешно обновлены/добавлены');
     return true;
 }
 
@@ -731,34 +726,47 @@ function processEquipmentData(data) {
 
 // Обновление статуса оборудования в UI
 function updateEquipmentStatus() {
-    const statusElement = document.getElementById('equipmentStatus'); // Статус в динамически созданных контролах
-    const directStatusElement = document.getElementById('directEquipmentStatus'); // Статус в HTML-разметке
-    
-    let isConnected = false;
-    if (window.app.equipmentManager && window.app.equipmentManager.port && window.app.equipmentManager.port.readable) { // Более надежная проверка
-        isConnected = true;
+    console.log('[APP updateEquipmentStatus] Вызвана функция обновления статуса UI.');
+    const statusBadge = document.getElementById('equipmentStatus');
+    const connectBtn = document.getElementById('connectEquipmentBtn');
+
+    if (!statusBadge) {
+        console.warn('[APP updateEquipmentStatus] Элемент statusBadge (id: equipmentStatus) НЕ НАЙДЕН. Обновление статуса невозможно.');
+        // Если нет кнопки, тоже стоит предупредить, так как они обычно вместе обновляются
+        if (!connectBtn) console.warn('[APP updateEquipmentStatus] Элемент connectBtn (id: connectEquipmentBtn) также НЕ НАЙДЕН.');
+        return;
+    }
+    // Если только кнопка не найдена (а значок есть), это тоже странно
+    if (!connectBtn) {
+        console.warn('[APP updateEquipmentStatus] Элемент connectBtn (id: connectEquipmentBtn) НЕ НАЙДЕН, хотя statusBadge есть. Обновление кнопки невозможно.');
     }
 
-    console.log('[APP updateEquipmentStatus] Обновление статуса. Подключено:', isConnected, 'Менеджер:', window.app.equipmentManager);
-
-    const updateBadge = (element) => {
-        if (element) {
-            if (isConnected) {
-                element.textContent = 'Подключено';
-                element.classList.remove('badge-danger', 'badge-warning');
-                element.classList.add('badge-success');
-            } else {
-                element.textContent = 'Отключено';
-                element.classList.remove('badge-success', 'badge-warning');
-                element.classList.add('badge-danger');
-            }
-        } else {
-            // console.warn('[APP updateEquipmentStatus] Элемент статуса не найден для обновления.');
+    const updateUIElements = (badgeText, badgeClass, btnText, btnClass, btnDisabled) => {
+        console.log(`[APP updateEquipmentStatus] Обновление UI: BadgeText='${badgeText}', BadgeClass='${badgeClass}', BtnText='${btnText}', BtnDisabled=${btnDisabled}`);
+        statusBadge.textContent = badgeText;
+        statusBadge.className = `badge ${badgeClass}`; 
+        if (connectBtn) { // Обновляем кнопку только если она есть
+            connectBtn.innerHTML = btnText;
+            connectBtn.className = `btn ${btnClass} btn-sm w-100 mb-3`;
+            connectBtn.disabled = btnDisabled;
         }
     };
 
-    updateBadge(statusElement);
-    updateBadge(directStatusElement);
+    if (window.app.equipmentManager && window.app.equipmentManager.port) {
+        updateUIElements('Подключено', 'bg-success', '<i class="bi bi-ethernet"></i> Отключить Arduino', 'btn-danger', false);
+    } else if (window.app.equipmentManager && window.app.equipmentManager.isConnecting) {
+        updateUIElements('Подключение...', 'bg-warning text-dark', '<i class="bi bi-hourglass-split"></i> Отмена подключения', 'btn-warning', false);
+    } else if (window.app.equipmentManager) { // Менеджер есть, но не подключен и не подключается -> ошибка или просто отключено
+        // В EquipmentManager может быть поле errorState или مشابه для более детального статуса ошибки
+        // Пока что, если он просто не подключен, отобразим "Отключено"
+        // Если бы был конкретный флаг ошибки, можно было бы отобразить "Ошибка"
+        console.log('[APP updateEquipmentStatus] Состояние: менеджер есть, но не подключен и не в процессе подключения.');
+        updateUIElements('Отключено', 'bg-danger', '<i class="bi bi-usb-plug"></i> Подключить Arduino', 'btn-primary', false);
+    } else {
+        // Менеджера нет (например, еще не инициализирован или ошибка при инициализации)
+        console.log('[APP updateEquipmentStatus] Состояние: менеджер оборудования отсутствует (window.app.equipmentManager is falsy).');
+        updateUIElements('Недоступно', 'bg-secondary', '<i class="bi bi-question-circle"></i> Статус неизвестен', 'btn-secondary', true);
+    }
 }
 
 // Использование симуляции вместо реального оборудования
@@ -896,7 +904,7 @@ function initializeEventHandlers() {
                 }
 
             } else if (currentButton.classList.contains('btn-danger')) { // Если кнопка "Остановить"
-                console.log(`[APP EvtHandlers] Этап ${currentStage} - Нажата кнопка "Остановить запись".`);
+                console.log(`[APP EvtHandlers] Этап ${currentStage} - Нажата кнопка "Остановить запись". Источник: ${event.isTrusted ? 'пользователь' : 'программный клик (вероятно, авто-остановка)'}.`);
                 try {
                     let distanceData = null;
                     // Останавливаем запись данных с Arduino и получаем собранные данные
@@ -1093,6 +1101,14 @@ function initializeEventHandlers() {
             // true означает, что это завершение эксперимента.
             // sendExperimentParams отправит сообщение type: 'complete_experiment' со всеми данными.
             await sendExperimentParams(window.app.currentStep, true);
+
+            // После успешной отправки команды на завершение, можно попытаться отключить оборудование
+            if (window.app && window.app.equipmentManager && window.app.equipmentManager.port) {
+                console.log('[APP EvtHandlers CompleteExp] Попытка отключить оборудование после команды завершения эксперимента.');
+                window.app.equipmentManager.disconnect()
+                    .then(() => console.log('[APP EvtHandlers CompleteExp] Оборудование успешно отключено.'))
+                    .catch(err => console.error('[APP EvtHandlers CompleteExp] Ошибка при отключении оборудования:', err));
+            }
             
             // Текст и состояние кнопки "Завершить эксперимент" должны обновиться 
             // при получении сообщения 'experiment_completed' от сервера (в функции handleExperimentComplete).
@@ -1368,3 +1384,17 @@ async function autoConnectToArduino() {
         return false;
     }
 }
+
+// Добавляем обработчик выгрузки страницы для корректного дисконнекта
+window.addEventListener('beforeunload', function (e) {
+    console.log('[APP beforeunload] Страница будет выгружена. Попытка отключить оборудование...');
+    if (window.app && window.app.equipmentManager && window.app.equipmentManager.port) {
+        // Не используем await здесь, так как beforeunload синхронный
+        window.app.equipmentManager.disconnect()
+            .then(() => console.log('[APP beforeunload] Команда disconnect вызвана успешно.'))
+            .catch(err => console.error('[APP beforeunload] Ошибка при вызове disconnect:', err));
+        // Можно попытаться сделать это синхронно, но Web Serial API асинхронный.
+        // Браузер может не дождаться завершения асинхронной операции.
+        // Лучше всего, если disconnect вызывается при явном действии пользователя (завершение эксперимента).
+    }
+});

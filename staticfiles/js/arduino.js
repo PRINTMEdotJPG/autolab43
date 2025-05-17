@@ -15,7 +15,7 @@
         this.firstArduinoTimestamp = null; // Временная метка первого сообщения от Arduino в текущем сегменте записи (в секундах), используется для расчета относительного времени.
         this.textDecoder = new TextDecoder();
         this.lastLogTime = 0; // Время последнего логирования
-        this.logInterval = 500; // Интервал для ограничения частоты вывода логов в консоль (в миллисекундах).
+        this.logInterval = 1000; // Интервал для ограничения частоты вывода логов в консоль (в миллисекундах).
         console.log('[EQM CONSTRUCTOR] EquipmentManager создан. Начальное состояние:', this);
       }
     
@@ -52,6 +52,16 @@
           this.port = null; // Убедимся, что порт сброшен при ошибке
           this.core.equipmentConnected = false;
           this.core.updateEquipmentStatus(); // Обновляем статус на "отключено"
+          // Улучшенное сообщение об ошибке
+          if (error.name === 'NetworkError' || error.name === 'InvalidStateError' || error.message.toLowerCase().includes('port is already open')) {
+            this.core.showAlert(
+                'Не удалось подключиться. Порт может быть занят другим приложением или предыдущей сессией. ' + 
+                'Попробуйте физически переподключить устройство или убедитесь, что другие программы не используют этот порт.', 
+                'danger'
+            );
+          } else {
+            this.core.showAlert(`Ошибка подключения: ${error.message}`, 'danger');
+          }
           this.core.useSimulation(); // Переключаемся на симуляцию при ошибке
         }
       }
@@ -140,6 +150,16 @@
           this.port = null; // Сброс порта при ошибке
           this.core.equipmentConnected = false;
           this.core.updateEquipmentStatus();
+          // Улучшенное сообщение об ошибке
+          if (error.name === 'NetworkError' || error.name === 'InvalidStateError' || error.message.toLowerCase().includes('port is already open')) {
+            this.core.showAlert(
+                `Не удалось подключиться к порту ${portPath}. Порт может быть занят другим приложением или предыдущей сессией. ` + 
+                'Попробуйте физически переподключить устройство или убедитесь, что другие программы не используют этот порт.', 
+                'danger'
+            );
+          } else {
+            this.core.showAlert(`Ошибка подключения к порту ${portPath}: ${error.message}`, 'danger');
+          }
           this.core.useSimulation();
           return false;
         }
@@ -196,6 +216,7 @@
       }
       
       processDistanceData(line) {
+        // console.log('[EQM RAW LINE RECEIVED] Line:', JSON.stringify(line)); // Log the raw line
         try {
           // Пытаемся распарсить строку как JSON
           const jsonData = JSON.parse(line);
@@ -233,7 +254,7 @@
                 // Ограничение частоты логирования
                 const now = Date.now();
                 if (now - this.lastLogTime > this.logInterval) {
-                    console.log('[EQM RECORDING] Добавлено (лог раз в 500мс):', { distance: distanceValue, time: relativeTimeSec, rawArduinoTime: arduinoTimeSec }, 'Всего:', this.distanceData.length);
+                    console.log(`[EQM RECORDING] Добавлено (лог раз в ${this.logInterval}мс):`, { distance: distanceValue, time: relativeTimeSec, rawArduinoTime: arduinoTimeSec }, 'Всего:', this.distanceData.length);
                     this.lastLogTime = now;
                 }
                 
@@ -241,13 +262,47 @@
                   distance: distanceValue,
                   time: relativeTimeSec // Отправляем относительное время и в processEquipmentData для UI
                 });
+
+                // АВТО-ОСТАНОВКА ПО ДАТЧИКУ РАССТОЯНИЯ
+                if (this.isRecording && distanceValue > 50) { // 500 мм = 50 см
+                  console.warn(`[EQM AUTOSENSOR-STOP] Расстояние ${distanceValue} мм > 500 мм. Попытка авто-остановки.`);
+                  let clickInitiated = false;
+
+                  if (window.app && window.app.recorder && window.app.recorder.isRecording() && window.app.currentStep) {
+                    console.log(`[EQM AUTOSENSOR-STOP] Запись активна на этапе ${window.app.currentStep}. Инициируем программный клик по кнопке 'Остановить'.`);
+                    const stopButton = document.querySelector(`.record-btn[data-stage="${window.app.currentStep}"].btn-danger`);
+                    if (stopButton) {
+                      console.log(`[EQM AUTOSENSOR-STOP] Найдена кнопка "Остановить". Выполняем click() ДЛЯ АВТОМАТИЧЕСКОЙ ОСТАНОВКИ.`);
+                      stopButton.click();
+                      clickInitiated = true; 
+                    } else {
+                      console.error('[EQM AUTOSENSOR-STOP] Не найдена активная кнопка "Остановить" для текущего этапа. Клик не выполнен.');
+                    }
+                  } else {
+                    console.log('[EQM AUTOSENSOR-STOP] Условия для авто-остановки через UI-клик не полностью выполнены.',
+                                {isManagerRecording: this.isRecording, isAppRecorderRecording: window.app && window.app.recorder ? window.app.recorder.isRecording() : 'N/A', currentStep: window.app ? window.app.currentStep : 'N/A'});
+                  }
+
+                  // Fallback: если клик не был инициирован (или не удался), но рекордер все еще пишет
+                  if (!clickInitiated && window.app && window.app.recorder && window.app.recorder.isRecording()) {
+                    console.warn('[EQM AUTOSENSOR-STOP] Клик по кнопке не был инициирован/успешен. Пробуем остановить аудиорекордер и сбор данных напрямую (fallback).');
+                    this.stopRecording(); // Останавливаем сбор данных в самом EquipmentManager
+                    window.app.recorder.stop()
+                        .then(() => console.log("[EQM AUTOSENSOR-STOP] Аудиорекордер остановлен напрямую (fallback)."))
+                        .catch(err => console.error("[EQM AUTOSENSOR-STOP] Ошибка прямой остановки аудиорекордера (fallback):", err));
+                    // TODO: Нужно также как-то завершить этап на сервере и в UI (обновить кнопку), если это не произошло через клик.
+                  } else if (clickInitiated) {
+                    console.log('[EQM AUTOSENSOR-STOP] Клик по кнопке остановки был инициирован. Ожидаем, что он приведет к полной остановке этапа.');
+                  }
+                }
+
               } else {
                 const arduinoTimeSecForLog = jsonData.timestamp / 1000; 
                 
                 // Ограничение частоты логирования для сообщений, когда запись не активна.
                 const nowNonRecording = Date.now();
                 if (nowNonRecording - this.lastLogTime > this.logInterval) {
-                    console.log('[EQM NOT RECORDING] Получено (лог раз в 500мс, не записывается):', { distance: distanceValue, time: arduinoTimeSecForLog });
+                    console.log(`[EQM NOT RECORDING] Получено (лог раз в ${this.logInterval}мс, не записывается):`, { distance: distanceValue, time: arduinoTimeSecForLog });
                     this.lastLogTime = nowNonRecording;
                 }
                 

@@ -49,6 +49,7 @@ INSTALLED_APPS = [
 ASGI_APPLICATION = 'autolab.asgi.application'
 
 AUTH_USER_MODEL = "lab_data.User"
+LOGIN_URL = '/login/'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

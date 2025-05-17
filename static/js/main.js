@@ -4,10 +4,10 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('[MAIN] Страница загружена, начинаем прямую инициализацию Arduino...');
     
     // Создаем элементы управления Arduino напрямую, если они отсутствуют
-    createDirectArduinoControls();
+    // createDirectArduinoControls();
     
     // Добавляем прямые обработчики событий
-    setTimeout(setupDirectHandlers, 500);
+    // setTimeout(setupDirectHandlers, 500);
 });
 
 // Функция для прямого создания элементов управления Arduino

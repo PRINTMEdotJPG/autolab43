@@ -23,6 +23,14 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="/">AutoLab</a>
+            <div class="ms-auto">
+                {% if user.is_authenticated %}
+                    <span class="navbar-text me-3">
+                        Добро пожаловать, {{ user.full_name|default:user.email }}!
+                    </span>
+                    <a href="{% url 'logout' %}" class="btn btn-outline-light btn-sm">Выход</a>
+                {% endif %}
+            </div>
         </div>
     </nav>
 

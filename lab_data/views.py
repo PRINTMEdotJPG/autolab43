@@ -10,9 +10,11 @@ from django.contrib.auth import login as auth_login
 from django.contrib import messages
 from django.views import View
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.decorators.http import require_http_methods
 from django.core.exceptions import PermissionDenied
 from django.contrib.auth import login as authenticate
+from django.contrib.auth import logout as auth_logout
 from django.contrib.auth import get_user_model
 from typing import Dict, Any, Optional
 import json
@@ -20,6 +22,7 @@ import logging
 import os
 from config import config
 from django.forms.models import model_to_dict
+import numpy as np
 
 from .models import User, Experiments, EquipmentData, Results
 from .imitate_module.sensors_simulator import ExperimentSimulator
@@ -85,17 +88,38 @@ def home_view(request) -> HttpResponse:
             student_experiments_data = []
             for exp in experiments_query:
                 student_facing_status = 'Неизвестно'
+                badge_class = 'bg-secondary' # Класс для badge по умолчанию
                 results_status = exp.results.status if hasattr(exp, 'results') and exp.results else None
-                exp_status_from_model = exp.status
+                exp_status_from_model = exp.status # Статус из модели Experiment
 
-                if results_status == 'pending_student_input':
-                    student_facing_status = 'в процессе выполнения'
-                elif results_status in ['success', 'fail', 'final_completed']:
-                    student_facing_status = 'Завершен'
+                if results_status: # Если есть статус в Results
+                    if results_status == 'pending_student_input':
+                        student_facing_status = 'в процессе выполнения'
+                        badge_class = 'bg-primary' 
+                    elif results_status == 'success' or results_status == 'final_completed':
+                        student_facing_status = 'Завершен'
+                        badge_class = 'bg-success'
+                    elif results_status == 'fail':
+                        student_facing_status = exp.results.get_status_display() # Должно быть 'Ошибка'
+                        badge_class = 'bg-danger'
+                    else: # Другие возможные статусы Results
+                        student_facing_status = exp.results.get_status_display()
+                        badge_class = 'bg-info' # Общий класс для прочих Result статусов
+                elif exp_status_from_model == 'failed': # Обработка нового статуса Experiments
+                    student_facing_status = exp.get_status_display() # Должно вернуть "Провальный"
+                    badge_class = 'bg-danger'
                 elif exp_status_from_model == 'completed':
-                    student_facing_status = 'Обрабатывается системой (ожидает формы ввода)'
+                    student_facing_status = 'Ожидает ваших результатов'
+                    badge_class = 'bg-info'
                 else:
+                    # Статус из модели Experiment, если нет данных в Results
                     student_facing_status = exp.get_status_display()
+                    if exp_status_from_model == 'aborted':
+                        badge_class = 'bg-dark'
+                    elif exp_status_from_model == 'preparing' or 'stage' in exp_status_from_model:
+                        badge_class = 'bg-warning'
+                    else:
+                        badge_class = 'bg-light text-dark'
 
                 student_experiments_data.append({
                     'id': exp.id,
@@ -104,7 +128,7 @@ def home_view(request) -> HttpResponse:
                     'raw_experiment_status': exp.status, # Оригинальный статус из Experiments
                     'results_status': results_status, # Статус из Results
                     'assistant_name': exp.assistant.full_name if exp.assistant else 'Нет данных',
-                    'get_status_badge': exp.get_status_display().lower() # Пример для badge, нужно будет создать такой метод в модели или логику в шаблоне
+                    'status_badge_class': badge_class # Новое поле для класса badge
                 })
             
             context['student_experiments_list'] = student_experiments_data
@@ -117,27 +141,71 @@ def home_view(request) -> HttpResponse:
 
 
     elif request.user.role == 'teacher':
-        logger.debug("Building context for teacher view")
-        groups_with_students = []
-        groups = User.objects.filter(role='student').values_list(
-            'group_name', flat=True
-        ).distinct()
+        logger.info(f"Building context for teacher: {request.user.email}")
+        
+        students_with_experiments = []
+        # Получаем всех студентов
+        all_students = User.objects.filter(role='student').order_by('group_name', 'full_name')
+        
+        for student in all_students:
+            experiments_query = Experiments.objects.filter(
+                user=student
+            ).select_related('results').order_by('-created_at')
+            
+            student_experiments_data = []
+            for exp in experiments_query:
+                results = getattr(exp, 'results', None)
+                status_display = 'Неизвестно'
+                badge_class = 'bg-secondary'
 
-        for group in groups:
-            students = User.objects.filter(
-                role='student',
-                group_name=group
-            ).order_by('full_name')
-            groups_with_students.append({
-                'name': group,
-                'students': students
+                if results:
+                    if results.status == 'pending_student_input':
+                        status_display = 'В процессе (студент)'
+                        badge_class = 'bg-primary'
+                    elif results.status == 'success' or results.status == 'final_completed':
+                        status_display = 'Завершен (успешно)'
+                        badge_class = 'bg-success'
+                    elif results.status == 'fail':
+                        status_display = 'Провален'
+                        badge_class = 'bg-danger'
+                    else:
+                        status_display = results.get_status_display()
+                        badge_class = 'bg-info'
+                elif exp.status == 'failed':
+                    status_display = 'Провален (системой)'
+                    badge_class = 'bg-danger'
+                elif exp.status == 'completed':
+                    status_display = 'Ожидает данных студента'
+                    badge_class = 'bg-warning'
+                else:
+                    status_display = exp.get_status_display()
+                    # Дополнительные классы можно назначить здесь на основе exp.status
+                    if exp.status == 'aborted':
+                        badge_class = 'bg-dark'
+                    elif 'stage' in exp.status or exp.status == 'preparing':
+                        badge_class = 'bg-warning text-dark'
+                    
+                student_experiments_data.append({
+                    'id': exp.id,
+                    'created_at': exp.created_at,
+                    'status_display': status_display,
+                    'badge_class': badge_class,
+                    'raw_status_experiment': exp.status,
+                    'raw_status_results': results.status if results else None,
+                })
+            
+            students_with_experiments.append({
+                'student_id': student.id,
+                'full_name': student.full_name,
+                'group_name': student.group_name if student.group_name else 'Без группы',
+                'experiments': student_experiments_data
             })
-            logger.debug(f"Added group {group} with {len(students)} students")
-
+            
         context.update({
-            'groups_with_students': groups_with_students,
+            'students_with_experiments': students_with_experiments,
             'is_teacher': True,
         })
+        logger.info(f"Prepared data for {len(students_with_experiments)} students for teacher {request.user.email}.")
 
     elif request.user.role == 'assistant':
         logger.info(f"Building context for assistant: {request.user.email}")
@@ -358,7 +426,7 @@ def retry_experiment(request, experiment_id: int) -> HttpResponse:
         return redirect('student_experiment_detail', experiment_id=experiment.id)
 
 
-class DownloadManualView(View):
+class DownloadManualView(LoginRequiredMixin, View):
     """Представление для скачивания методического пособия."""
 
     def get(self, request) -> FileResponse:
@@ -371,10 +439,6 @@ class DownloadManualView(View):
         Returns:
             FileResponse: PDF файл или 404 ошибка
         """
-        if not request.user.is_authenticated:
-            logger.warning("Unauthorized manual download attempt")
-            return HttpResponseForbidden()
-
         file_path = config.MANUAL_PDF_PATH
         if os.path.exists(file_path):
             logger.info(f"User {request.user.email} downloaded manual")
@@ -386,6 +450,7 @@ class DownloadManualView(View):
         logger.error(f"Manual not found at {file_path}")
         raise Http404("Методичка не найдена")
     
+@login_required
 def submit_results(request):
     data = json.loads(request.body)
     experiment = Experiments.objects.get(id=data['experiment_id'])
@@ -435,86 +500,122 @@ def save_experiment_results(request, experiment_id):
         results_entry.student_speed = student_speed
         results_entry.student_gamma = student_gamma
 
-        # system_gamma должен быть уже в results_entry.gamma_calculated
-        # Если он там по какой-то причине отсутствует, то расчет ошибки будет некорректен.
-        current_system_gamma = results_entry.gamma_calculated 
-        error_percent_calculated = None
+        current_system_gamma = results_entry.gamma_calculated
+        current_system_speed = results_entry.speed_of_sound_calculated # Новое
+
+        error_percent_gamma = None
+        error_percent_speed = None # Новое
 
         if current_system_gamma is not None and current_system_gamma != 0:
-            calculated_error = abs((student_gamma - current_system_gamma) / current_system_gamma) * 100
-            error_percent_calculated = round(calculated_error, 2)
+            calculated_error_gamma = abs((student_gamma - current_system_gamma) / current_system_gamma) * 100
+            error_percent_gamma = round(calculated_error_gamma, 2)
         else:
-            logger.warning(f"System gamma (results_entry.gamma_calculated) for experiment {experiment_id} is {current_system_gamma}. Cannot calculate error percentage.")
-            # error_percent_calculated остается None
+            logger.warning(f"System gamma (results_entry.gamma_calculated) for experiment {experiment_id} is {current_system_gamma}. Cannot calculate gamma error percentage.")
 
-        results_entry.error_percent = error_percent_calculated # Присваиваем рассчитанное значение или None
+        if current_system_speed is not None and current_system_speed != 0: # Новое условие для скорости
+            calculated_error_speed = abs((student_speed - current_system_speed) / current_system_speed) * 100
+            error_percent_speed = round(calculated_error_speed, 2)
+        else:
+            logger.warning(f"System speed (results_entry.speed_of_sound_calculated) for experiment {experiment_id} is {current_system_speed}. Cannot calculate speed error percentage.")
 
-        # Определение статуса на основе погрешности гаммы
-        ACCEPTABLE_ERROR_PERCENT = 5.0 
-        if error_percent_calculated is not None:
-            if error_percent_calculated <= ACCEPTABLE_ERROR_PERCENT:
+        results_entry.error_percent_gamma = error_percent_gamma # Обновлено имя поля
+        results_entry.error_percent_speed = error_percent_speed # Новое поле
+
+        ACCEPTABLE_ERROR_PERCENT = 5.0
+        
+        # Новая логика определения статуса
+        if error_percent_gamma is not None and error_percent_speed is not None:
+            if error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT and error_percent_speed <= ACCEPTABLE_ERROR_PERCENT:
                 results_entry.status = 'success'
             else:
                 results_entry.status = 'fail'
+        elif error_percent_gamma is not None: # Если посчитана только ошибка гаммы
+             if error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT:
+                 # Не можем считать успехом, если скорость не проверена
+                 # Если current_system_speed is None, это проблема данных, а не студента
+                 # Можно установить специфический статус или оставить fail/pending
+                 results_entry.status = 'fail' # или другой статус, например, 'error_system_data_missing_speed'
+                 logger.warning(f"Experiment {experiment_id}: Gamma error is acceptable, but speed error could not be calculated. Status set to fail.")
+             else:
+                 results_entry.status = 'fail'
+        elif error_percent_speed is not None: # Если посчитана только ошибка скорости
+             if error_percent_speed <= ACCEPTABLE_ERROR_PERCENT:
+                 results_entry.status = 'fail' # Аналогично, не можем считать успехом без гаммы
+                 logger.warning(f"Experiment {experiment_id}: Speed error is acceptable, but gamma error could not be calculated. Status set to fail.")
+             else:
+                 results_entry.status = 'fail'
         else:
-            # Если ошибка не была рассчитана (например, current_system_gamma был 0 или None),
-            # статус не должен автоматически становиться 'success' или 'fail' на основе ошибки.
-            # Оставляем статус как есть (вероятно 'pending_student_input') или устанавливаем
-            # специфический статус, если это требуется.
-            # В вашем случае, если system_gamma не было, логгирование уже есть.
-            # results_entry.status = 'error_system_data_missing' # Пример
-            pass # Не меняем статус, если ошибка не посчитана
+            # Ошибки не рассчитаны (например, current_system_gamma и current_system_speed были 0 или None)
+            # Статус не должен автоматически становиться 'success'.
+            results_entry.status = 'fail' # Или 'error_system_data_missing'
+            logger.warning(f"Experiment {experiment_id}: Neither gamma nor speed error could be calculated. Status set to fail.")
 
-        results_entry.save() # Сохраняем все изменения
 
-        # Логгирование сразу после сохранения
+        results_entry.save()
+
         logger.info(f"Data saved for Results ID {results_entry.pk}: "
                     f"Student Speed: {results_entry.student_speed}, "
                     f"Student Gamma: {results_entry.student_gamma}, "
-                    f"System Gamma (gamma_calculated): {results_entry.gamma_calculated}, "
-                    f"Error Percent: {results_entry.error_percent}, "
+                    f"System Gamma: {results_entry.gamma_calculated}, "
+                    f"System Speed: {results_entry.speed_of_sound_calculated}, " # Новое
+                    f"Error Gamma: {results_entry.error_percent_gamma}%, " # Обновлено
+                    f"Error Speed: {results_entry.error_percent_speed}%, " # Новое
                     f"Status: {results_entry.status}")
 
-        # --- НАЧАЛО ИЗМЕНЕНИЯ: Копирование данных в Experiment ---
         if experiment:
             experiment.student_speed = results_entry.student_speed
             experiment.student_gamma = results_entry.student_gamma
-            experiment.system_gamma = results_entry.gamma_calculated # Копируем системную гамму
-            experiment.error_percent = results_entry.error_percent
+            experiment.system_gamma = results_entry.gamma_calculated
+            experiment.system_speed_of_sound = results_entry.speed_of_sound_calculated # Новое
+            experiment.error_percent_gamma = results_entry.error_percent_gamma # Обновлено
+            experiment.error_percent_speed = results_entry.error_percent_speed # Новое
             
-            # === Новая логика для статуса эксперимента ===
             if results_entry.status == 'success':
-                experiment.status = 'completed' # Устанавливаем статус "Завершен" для эксперимента
+                experiment.status = 'completed'
                 logger.info(f"Experiment ID {experiment.id} status changed to 'completed' due to successful student results.")
-            # === Конец новой логики ===
+            elif results_entry.status == 'fail':
+                experiment.status = 'failed' # Устанавливаем новый статус 'failed' для эксперимента
+                logger.info(f"Experiment ID {experiment.id} status changed to 'failed' due to student results being 'fail'.")
             
             experiment.save()
             logger.info(f"Data copied and saved to Experiment ID {experiment.id}: "
                         f"Student Speed: {experiment.student_speed}, "
                         f"Student Gamma: {experiment.student_gamma}, "
                         f"System Gamma: {experiment.system_gamma}, "
-                        f"Error Percent: {experiment.error_percent}, "
-                        f"Experiment Status: {experiment.status}") # Добавлено логирование статуса эксперимента
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                        f"System Speed: {experiment.system_speed_of_sound}, " # Новое
+                        f"Error Gamma: {experiment.error_percent_gamma}%, " # Обновлено
+                        f"Error Speed: {experiment.error_percent_speed}%, " # Новое
+                        f"Experiment Status: {experiment.status}")
 
         response_payload = {
-            'status': 'success',
+            'status': 'success', # Статус HTTP запроса, не статус проверки
             'message': 'Результаты успешно сохранены!',
-            'results_status': results_entry.status,
-            'error_percent_gamma': results_entry.error_percent, # Используем значение из сохраненного объекта
+            'results_status': results_entry.status, # Статус проверки (success/fail)
+            'error_percent_gamma': results_entry.error_percent_gamma,
+            'error_percent_speed': results_entry.error_percent_speed, # Новое
             'student_values': {
-                'gamma': results_entry.student_gamma, # Используем значение из сохраненного объекта
-                'speed': results_entry.student_speed  # Используем значение из сохраненного объекта
+                'gamma': results_entry.student_gamma,
+                'speed': results_entry.student_speed
             },
             'system_values': {
-                'gamma': results_entry.gamma_calculated # Используем значение из сохраненного объекта
+                'gamma': results_entry.gamma_calculated,
+                'speed': results_entry.speed_of_sound_calculated # Новое
             }
         }
-        if results_entry.status == 'fail' and results_entry.error_percent is not None: # Добавил проверку на None
-            response_payload['comparison_message'] = (
-                f"Отклонение вашего значения γ ({results_entry.student_gamma}) "
-                f"от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent}%."
-            )
+        # Обновляем сообщение об ошибке, если есть
+        # Можно сделать более детальным, указав какая из ошибок (или обе) привели к 'fail'
+        if results_entry.status == 'fail':
+            error_messages = []
+            if results_entry.error_percent_gamma is not None:
+                error_messages.append(f"Отклонение вашего значения γ ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent_gamma}%.")
+            if results_entry.error_percent_speed is not None:
+                 error_messages.append(f"Отклонение вашей скорости звука ({results_entry.student_speed}) от системной ({results_entry.speed_of_sound_calculated}) составило {results_entry.error_percent_speed}%.")
+            if not error_messages and (results_entry.gamma_calculated is None or results_entry.speed_of_sound_calculated is None) :
+                 error_messages.append("Не удалось провести сравнение из-за отсутствия системных данных для расчета.")
+            elif not error_messages:
+                 error_messages.append("Результаты не соответствуют критериям успешного выполнения.")
+
+            response_payload['comparison_message'] = " ".join(error_messages)
         
         return JsonResponse(response_payload)
     
@@ -527,6 +628,7 @@ def save_experiment_results(request, experiment_id):
             'message': str(e)
         }, status=500)
     
+@login_required
 def download_protocol(request, experiment_id):
     experiment = get_object_or_404(Experiments, id=experiment_id)
     student = experiment.user
@@ -766,17 +868,25 @@ def get_student_experiments(request):
         experiments_data = []
         for exp in experiments_with_results:
             student_facing_status = 'Неизвестно'
-            # Пытаемся получить статус из связанной записи Results
             results_status = exp.results.status if hasattr(exp, 'results') and exp.results else None
-            exp_status_from_model = exp.status # Статус из модели Experiments
+            exp_status_from_model = exp.status
 
-            if results_status == 'pending_student_input':
-                student_facing_status = 'в процессе выполнения' 
-            elif results_status == 'success' or results_status == 'fail' or results_status == 'final_completed':
-                student_facing_status = 'Завершен' 
-            elif exp_status_from_model == 'completed': 
-                student_facing_status = 'Обрабатывается системой (ожидает формы ввода)'
+            if results_status: # Если есть статус в Results
+                if results_status == 'pending_student_input':
+                    student_facing_status = 'в процессе выполнения'
+                elif results_status == 'success' or results_status == 'final_completed':
+                    student_facing_status = 'Завершен'
+                elif results_status == 'fail':
+                    student_facing_status = exp.results.get_status_display() # Должно быть 'Провальный'
+                else: # Другие возможные статусы Results (например, completed_by_assistant)
+                    student_facing_status = exp.results.get_status_display()
+            elif exp_status_from_model == 'failed': # Обработка статуса Experiments.failed
+                student_facing_status = exp.get_status_display() # Должно вернуть "Провальный"
+            elif exp_status_from_model == 'completed':
+                # Эксперимент завершен лаборантом, но студент еще не вводил данные, или Results еще не созданы/обновлены
+                student_facing_status = 'Ожидает ваших результатов'
             else:
+                # Статус из модели Experiment, если нет данных в Results и не 'failed'/'completed'
                 student_facing_status = exp.get_status_display()
 
             experiments_data.append({
@@ -938,13 +1048,19 @@ def complete_experiment(request, experiment_id):
         
         experiment.save()
 
-        # Создаем или обновляем запись результатов
+        # <<< НАЧАЛО НОВОГО КОДА ДЛЯ РАСЧЕТА СИСТЕМНЫХ ЗНАЧЕНИЙ >>>
+        system_avg_speed, system_avg_gamma = calculate_system_results(experiment.stages, experiment.temperature)
+        logger.info(f"Experiment {experiment_id}: Calculated system_avg_speed={system_avg_speed}, system_avg_gamma={system_avg_gamma}")
+        # <<< КОНЕЦ НОВОГО КОДА >>>
+
         Results.objects.update_or_create(
             experiment=experiment,
             defaults={
                 'visualization_data': data.get('charts_data', {}),
                 'detailed_results': data.get('steps', []),
-                'status': 'pending'  # Ожидает ввода данных от студента
+                'status': 'pending_student_input', # Изменено на pending_student_input
+                'gamma_calculated': system_avg_gamma, # Сохраняем рассчитанную системную гамму
+                'speed_of_sound_calculated': system_avg_speed # Сохраняем рассчитанную системную скорость
             }
         )
 
@@ -974,6 +1090,31 @@ def get_experiment_details_for_student(request, experiment_id):
                     
                     minima_table_for_stage = []
                     l_values_for_delta_calc = [] # Для расчета delta_l
+
+                    # >>> НАЧАЛО ИЗМЕНЕНИЙ ДЛЯ ПОЛНОГО СИГНАЛА
+                    full_signal_data_for_stage = []
+                    # ИЗМЕНЕНИЕ: Используем новые поля 'graph_distances_cm' и 'graph_amplitudes'
+                    graph_distances_cm = stage_dict.get('graph_distances_cm', [])
+                    graph_amplitudes = stage_dict.get('graph_amplitudes', [])
+                    
+                    logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Data for graph: {len(graph_distances_cm)} distances, {len(graph_amplitudes)} amplitudes.")
+
+                    if isinstance(graph_distances_cm, list) and isinstance(graph_amplitudes, list) and len(graph_distances_cm) == len(graph_amplitudes):
+                        for i in range(len(graph_distances_cm)):
+                            try:
+                                # Расстояния в 'graph_distances_cm' уже в СМ
+                                pos_m = float(graph_distances_cm[i]) / 100.0 
+                                amp = float(graph_amplitudes[i])
+                                if not (np.isnan(pos_m) or np.isnan(amp)): # Пропускаем NaN значения
+                                    full_signal_data_for_stage.append({'position': pos_m, 'amplitude': amp})
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Error converting graph data point: dist={graph_distances_cm[i]}, amp={graph_amplitudes[i]}. Error: {e}")
+                        logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Processed full_signal_data_for_stage (first 5): {full_signal_data_for_stage[:5]}")
+                    elif len(graph_distances_cm) != len(graph_amplitudes):
+                        logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Mismatch in lengths for graph data: {len(graph_distances_cm)} distances vs {len(graph_amplitudes)} amplitudes.")
+                    else:
+                        logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Graph data is not in list format or is missing. Distances type: {type(graph_distances_cm)}, Amplitudes type: {type(graph_amplitudes)}")
+                    # <<< КОНЕЦ ИЗМЕНЕНИЙ ДЛЯ ПОЛНОГО СИГНАЛА
 
                     if isinstance(raw_minima_data, list):
                         # Сортируем минимумы по 'distance_m' перед использованием, если они еще не отсортированы
@@ -1031,12 +1172,14 @@ def get_experiment_details_for_student(request, experiment_id):
                     # --- КОНЕЦ ЛОГИРОВАНИЯ ---
 
                     stages_data_for_student.append({
+                        'id': stage_index, # Добавляем ID на основе индекса
                         'stage_number': stage_index + 1,
                         'frequency_hz': stage_dict.get('frequency'),
-                        # 'temperature_celsius': stage_dict.get('temperature', experiment.temperature), # Если нужна температура этапа
+                        #'temperature_celsius': stage_dict.get('temperature', experiment.temperature), // Если нужна температура этапа
                         'minima_table': minima_table_for_stage,
                         'delta_l_values_m': delta_l_values,
-                        'average_delta_l_m': average_delta_l
+                        'average_delta_l_m': average_delta_l,
+                        'full_signal_data': full_signal_data_for_stage # >>> ДОБАВЛЕНО НОВОЕ ПОЛЕ
                     })
                 else:
                     logger.warning(f"Этап {stage_index+1} в эксперименте {experiment.id} не является словарем: {stage_dict}")
@@ -1067,24 +1210,32 @@ def get_experiment_details_for_student(request, experiment_id):
                 }
             
             # Если есть ошибка, и статус 'fail', формируем детали
-            if results_status == 'fail' and results_entry.error_percent is not None:
+            if results_status == 'fail' and results_entry.error_percent_gamma is not None:
                 error_details = {
                     'student_gamma': results_entry.student_gamma,
-                    'system_gamma': results_entry.gamma_calculated, # Сравниваем с системной
-                    'error_percent_gamma': results_entry.error_percent, # Предполагаем, что error_percent это для гаммы
-                    'message': f"Отклонение значения γ студента ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent}%."
+                    'system_gamma': results_entry.gamma_calculated,
+                    'error_percent_gamma': results_entry.error_percent_gamma,
+                    'message': f"Отклонение значения γ студента ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent_gamma}%."
                     # Можно добавить аналогично для скорости звука, если будет сравниваться
+                    # Например, добавить сюда error_percent_speed, если он есть
                 }
+                # Дополнительно добавим информацию об ошибке скорости, если она есть
+                if hasattr(results_entry, 'error_percent_speed') and results_entry.error_percent_speed is not None:
+                    error_details['error_percent_speed'] = results_entry.error_percent_speed
+                    error_details['student_speed'] = results_entry.student_speed
+                    error_details['system_speed'] = results_entry.speed_of_sound_calculated
+                    error_details['message_speed'] = f"Отклонение скорости звука студента ({results_entry.student_speed}) от системной ({results_entry.speed_of_sound_calculated}) составило {results_entry.error_percent_speed}%."
 
         # --- НАЧАЛО ИЗМЕНЕНИЯ ---
-        # Предполагаем, что settings.DEBUG доступен, или можно установить True/False напрямую
-        try:
-            from django.conf import settings
-            DEBUG_MODE_FOR_STUDENT_PROFILE = settings.DEBUG 
-        except ImportError:
-            DEBUG_MODE_FOR_STUDENT_PROFILE = True # Запасной вариант, если settings не импортируются здесь напрямую
+        # Принудительно отключаем отладочный режим для профиля студента
+        DEBUG_MODE_FOR_STUDENT_PROFILE = False
         # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
+        error_percent_gamma_val = None
+        error_percent_speed_val = None
+        if results_entry:
+            error_percent_gamma_val = results_entry.error_percent_gamma
+            error_percent_speed_val = results_entry.error_percent_speed
 
         response_data = {
             'status': 'success',
@@ -1099,6 +1250,8 @@ def get_experiment_details_for_student(request, experiment_id):
             'student_submitted_results': student_submitted_data, # Что студент уже вводил
             'results_processing_status': results_status, # Статус из Results (pending_student_input, success, fail)
             'error_details': error_details, # Информация об ошибке, если есть
+            'error_percent_gamma': error_percent_gamma_val,
+            'error_percent_speed': error_percent_speed_val,
             'debug_mode_for_student_profile': DEBUG_MODE_FOR_STUDENT_PROFILE # --- ДОБАВЛЕНО ---
         }
 
@@ -1143,3 +1296,166 @@ def student_experiment_detail_view(request, experiment_id):
         logger.error(f"Unexpected error in student_experiment_detail_view for user {request.user.email}, experiment {experiment_id}: {str(e)}", exc_info=True)
         # Для других непредвиденных ошибок можно вернуть более общее сообщение
         raise Http404("Произошла неожиданная ошибка при загрузке страницы эксперимента.")
+
+# Вспомогательная функция для расчета системных значений
+def calculate_system_results(stages_data, global_temperature_celsius):
+    logger.info(f"Начало calculate_system_results. Температура: {global_temperature_celsius}°C. Этапы: {len(stages_data) if stages_data else 0}")
+    all_calculated_speeds = []
+    all_calculated_gammas = []
+
+    if not isinstance(stages_data, list):
+        logger.error(f"Ошибка: stages_data не является списком: {stages_data}")
+        return None, None
+
+    for i, stage in enumerate(stages_data):
+        if not isinstance(stage, dict):
+            logger.warning(f"Этап {i+1} не является словарем, пропускается: {stage}")
+            continue
+
+        frequency = stage.get('frequency')
+        # Данные о минимумах теперь ожидаются в experiment.stages[i].get('minima') 
+        # или в data.get('steps')[i].get('labels') -> это minima
+        # Структура данных в 'data' и 'labels' из complete_experiment:
+        # 'data': step_data['data'] -> это сырые данные {time_ms, microphone_signal, tube_position, voltage}
+        # 'labels': step_data['labels'] -> это обработанные минимумы [{value, distance_m, time_sec, ...}]
+        minima_data = stage.get('labels') # Предполагаем, что 'labels' содержит данные о минимумах
+        
+        # Также может быть, что минимумы хранятся в stage.get('minima'), если они там были ранее
+        if not minima_data and 'minima' in stage:
+             minima_data = stage.get('minima')
+             logger.info(f"Этап {i+1}: минимумы взяты из stage.minima")
+        elif minima_data:
+             logger.info(f"Этап {i+1}: минимумы взяты из stage.labels")
+        else:
+            logger.warning(f"Этап {i+1}: данные о минимумах (ни labels, ни minima) не найдены. Частота: {frequency}. Данные этапа: {stage}")
+            continue
+
+        if not frequency or not isinstance(minima_data, list) or len(minima_data) < 2:
+            logger.warning(f"Этап {i+1}: недостаточно данных (частота: {frequency}, минимумы: {len(minima_data) if minima_data else 0}). Пропускается.")
+            continue
+        
+        valid_minima_distances = []
+        for m_idx, m_val in enumerate(minima_data):
+            if isinstance(m_val, dict) and isinstance(m_val.get('distance_m'), (int, float)):
+                valid_minima_distances.append(float(m_val['distance_m']))
+            else:
+                logger.warning(f"Этап {i+1}, минимум {m_idx}: некорректный формат или отсутствует 'distance_m'. Данные: {m_val}")
+        
+        if len(valid_minima_distances) < 2:
+            logger.warning(f"Этап {i+1}: недостаточно валидных минимумов с 'distance_m' ({len(valid_minima_distances)}). Расчет для этапа невозможен.")
+            continue
+        
+        # Сортировка положений минимумов
+        valid_minima_distances.sort()
+
+        delta_l_values = [valid_minima_distances[k+1] - valid_minima_distances[k] for k in range(len(valid_minima_distances)-1)]
+        # Убираем нулевые или отрицательные delta_l, если такие есть после сортировки (хотя не должно быть при корректных данных)
+        delta_l_values = [d for d in delta_l_values if d > 1e-9] 
+
+        if not delta_l_values:
+            logger.warning(f"Этап {i+1}: не удалось рассчитать валидные delta_L. Пропускается.")
+            continue
+
+        avg_delta_l = sum(delta_l_values) / len(delta_l_values)
+        stage_speed = 2 * avg_delta_l * float(frequency)
+        stage_gamma = calculate_gamma_value(stage_speed, global_temperature_celsius)
+
+        logger.info(f"Этап {i+1}: Расчет. Частота={frequency} Hz, AvgDeltaL={avg_delta_l:.4f} м, Скорость={stage_speed:.2f} м/с, Гамма={stage_gamma:.4f if stage_gamma is not None else 'N/A'}")
+
+        if stage_speed is not None and stage_speed > 0:
+            all_calculated_speeds.append(stage_speed)
+        if stage_gamma is not None:
+            all_calculated_gammas.append(stage_gamma)
+
+    final_avg_speed = (sum(all_calculated_speeds) / len(all_calculated_speeds)) if all_calculated_speeds else None
+    final_avg_gamma = (sum(all_calculated_gammas) / len(all_calculated_gammas)) if all_calculated_gammas else None
+    
+    logger.info(f"Итоговые системные расчеты: Средняя скорость={final_avg_speed}, Средняя гамма={final_avg_gamma}")
+    return final_avg_speed, final_avg_gamma
+
+def calculate_gamma_value(v_sound, temperature_celsius):
+    """Расчет коэффициента γ по скорости звука и температуре."""
+    if v_sound is None or v_sound <= 0 or temperature_celsius is None:
+        logger.warning(f"Некорректные входные данные для calculate_gamma_value: v={v_sound}, T={temperature_celsius}")
+        return None
+    R = 8.314  # Универсальная газовая постоянная Дж/(моль·К)
+    mu = 0.029  # Молярная масса воздуха (кг/моль)
+    T_kelvin = temperature_celsius + 273.15
+    if T_kelvin <= 0:
+        logger.warning(f"Некорректная температура в Кельвинах ({T_kelvin} K) для расчета γ.")
+        return None
+    try:
+        gamma = (v_sound ** 2 * mu) / (R * T_kelvin)
+        return float(gamma) if not np.isnan(gamma) else None
+    except (OverflowError, ZeroDivisionError) as e:
+        logger.error(f"Ошибка при расчете gamma: v={v_sound}, T_k={T_kelvin}, {e}")
+        return None
+
+@login_required
+def protocol_detail_view(request, experiment_id):
+    if not request.user.role == 'teacher':
+        logger.warning(f"User {request.user.email} (role: {request.user.role}) "
+                       f"attempted to access protocol for experiment {experiment_id} without teacher role.")
+        return HttpResponseForbidden("Доступ запрещен: только преподаватели могут просматривать протоколы.")
+
+    logger.info(f"Teacher {request.user.email} accessing protocol for experiment_id: {experiment_id}")
+    
+    try:
+        experiment = Experiments.objects.select_related('user', 'results').get(id=experiment_id)
+    except Experiments.DoesNotExist:
+        logger.error(f"Experiment with id {experiment_id} not found for protocol view.")
+        raise Http404("Эксперимент не найден.")
+
+    student = experiment.user
+    results = getattr(experiment, 'results', None)
+
+    # Определение статуса для протокола
+    protocol_status = "Статус не определен"
+    if results:
+        if results.status == 'success' or results.status == 'final_completed':
+            protocol_status = "Завершен (успешно)"
+        elif results.status == 'fail':
+            protocol_status = "Провал"
+        elif results.status == 'pending_student_input':
+            protocol_status = "В процессе выполнения студентом"
+        else:
+            protocol_status = results.get_status_display() # Для других статусов Results
+    elif experiment.status == 'failed':
+        protocol_status = "Провал (завершено системой с ошибкой)"
+    elif experiment.status == 'completed':
+        # Эксперимент завершен лаборантом, но студент еще не предоставил данные
+        protocol_status = "Ожидает ввода студента"
+    else:
+        protocol_status = experiment.get_status_display()
+
+
+    context = {
+        'experiment_id': experiment.id,
+        'student_full_name': student.full_name,
+        'student_group': student.group_name if student.group_name else "Не указана",
+        'student_provided_speed': results.student_speed if results else "Нет данных",
+        'student_provided_gamma': results.student_gamma if results else "Нет данных",
+        'system_calculated_speed': results.speed_of_sound_calculated if results else "Нет данных",
+        'system_calculated_gamma': results.gamma_calculated if results else "Нет данных",
+        'error_percent_speed': results.error_percent_speed if results and results.error_percent_speed is not None else "Нет данных",
+        'error_percent_gamma': results.error_percent_gamma if results and results.error_percent_gamma is not None else "Нет данных",
+        'experiment_status_protocol': protocol_status,
+        'experiment_creation_date': experiment.created_at,
+        'is_teacher': True # Для общего шаблона, если нужно
+    }
+    
+    # Дополнительно передаем сами объекты, если нужны еще какие-то данные в шаблоне
+    context['experiment_obj'] = experiment
+    context['results_obj'] = results
+    
+    logger.debug(f"Context for protocol_detail_view (exp_id: {experiment_id}): {context}")
+
+    return render(request, 'lab_data/protocol_detail.html', context)
+
+def logout_view(request):
+    """Обрабатывает выход пользователя из системы."""
+    user_email = request.user.email if request.user.is_authenticated else 'AnonymousUser'
+    auth_logout(request)
+    messages.info(request, "Вы успешно вышли из системы.")
+    logger.info(f"User {user_email} logged out successfully.")
+    return redirect('login_choice') # Или другой URL для страницы входа, например, settings.LOGIN_URL

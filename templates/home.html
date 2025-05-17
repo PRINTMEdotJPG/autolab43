@@ -7,7 +7,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Акустический эксперимент</title>
+    <title>Акустический эксперимент - {% if user.role == 'student' %}Студент{% elif user.role == 'teacher' %}Преподаватель{% elif user.role == 'assistant' %}Лаборант{% else %}Главная{% endif %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
@@ -91,19 +91,7 @@
                                         <td>#{{ exp.id }}</td>
                                         <td>{{ exp.created_at|date:"d.m.Y H:i" }}</td>
                                         <td>
-                                            {% with status=exp.status_for_student %}
-                                                {% if "в процессе выполнения" in status %}
-                                                    <span class="badge bg-primary">{{ status }}</span>
-                                                {% elif "Завершен" in status %}
-                                                    <span class="badge bg-success">{{ status }}</span>
-                                                {% elif "Обрабатывается системой" in status %}
-                                                    <span class="badge bg-secondary">{{ status }}</span>
-                                                {% elif "Подготовка" in status %}
-                                                    <span class="badge bg-warning text-dark">{{ status }}</span>
-                                                {% else %}
-                                                    <span class="badge bg-light text-dark">{{ status }}</span>
-                                                {% endif %}
-                                            {% endwith %}
+                                            <span class="badge {{ exp.status_badge_class }}">{{ exp.status_for_student }}</span>
                                         </td>
                                         <td>{{ exp.assistant_name }}</td>
                                         <td>
@@ -282,6 +270,49 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+    {% elif user.role == 'teacher' or is_teacher %}
+        <!-- ПРЕПОДАВАТЕЛЬ: Просмотр студентов и их экспериментов -->
+        <div class="container mt-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2>Панель преподавателя</h2>
+                {# Можно добавить кнопку "Обновить список", если потребуется #}
+            </div>
+            <p class="lead">Список студентов и их экспериментов:</p>
+
+            {% if students_with_experiments %}
+                {% for student_data in students_with_experiments %}
+                <div class="card mb-4 experiment-card">
+                    <div class="card-header bg-light">
+                    <h5 class="mb-0">Студент: {{ student_data.full_name }} <small class="text-muted">(Группа: {{ student_data.group_name }})</small></h5>
+                    </div>
+                    <div class="card-body">
+                    {% if student_data.experiments %}
+                        <ul class="list-group list-group-flush">
+                        {% for exp in student_data.experiments %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                Эксперимент #{{ exp.id }} от {{ exp.created_at|date:"d.m.Y H:i" }}
+                                <span class="badge {{ exp.badge_class }} ms-2">{{ exp.status_display }}</span>
+                            </div>
+                            <a href="{% url 'protocol_detail' exp.id %}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-file-text"></i> Протокол
+                            </a>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted mb-0">У этого студента пока нет экспериментов.</p>
+                    {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle-fill"></i> Студенты не найдены или у них нет экспериментов.
+                </div>
+            {% endif %}
         </div>
 
     {% else %}

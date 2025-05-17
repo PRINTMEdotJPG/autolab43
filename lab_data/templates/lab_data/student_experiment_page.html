@@ -25,8 +25,11 @@
             <h5><span class="badge bg-warning">Отладочная информация</span></h5>
             
             <h6>Системные расчеты:</h6>
-            <p><strong>Расчетный показатель адиабаты (γ):</strong> <span id="debug-system-gamma"></span></p>
+            <p><strong>Рассчитанная скорость звука (система, м/с):</strong> <span id="system-speed-of-sound"></span></p>
+            <p><strong>Рассчитанный показатель адиабаты (γ):</strong> <span id="system-gamma"></span></p>
+            <p><strong>Пользовательская ошибка по γ (%):</strong> <span id="user-gamma-error"></span></p>
             
+            <h4>Отладочная информация (Расчеты системы)</h4>
             <h6>Детали по этапам (включая таблицы минимумов):</h6>
             <div id="debug-stages-details">
                 <!-- Отладочная информация по этапам будет сюда добавлена -->
@@ -63,6 +66,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const experimentId = {{ experiment_id }};
@@ -111,28 +115,32 @@
                     if (data.debug_mode_for_student_profile) {
                         debugInfoContainer.style.display = 'block';
                         
-                        if (data.system_calculated_results) {
-                            debugSystemGammaEl.textContent = data.system_calculated_results.gamma !== null && data.system_calculated_results.gamma !== undefined ? data.system_calculated_results.gamma.toFixed(4) : 'Нет данных';
-                        } else {
-                            debugSystemGammaEl.textContent = 'Нет данных';
+                        if (debugSystemGammaEl) {
+                            if (data.system_calculated_results) {
+                                debugSystemGammaEl.textContent = data.system_calculated_results.gamma !== null && data.system_calculated_results.gamma !== undefined ? data.system_calculated_results.gamma.toFixed(4) : 'Нет данных';
+                            } else {
+                                debugSystemGammaEl.textContent = 'Нет данных';
+                            }
                         }
 
-                        debugStagesDetailsEl.innerHTML = '';
-                        data.stages.forEach(stage => {
-                            let stageHtml = `<div class="mb-2 p-2 border rounded"><strong>Этап ${stage.stage_number} (Частота: ${stage.frequency_hz} Hz):</strong><br>`;
-                            if (stage.minima_table && stage.minima_table.length > 0) {
-                                stageHtml += '<table class="table table-sm table-bordered w-auto"><thead><tr><th>№</th><th>L, м</th></tr></thead><tbody>';
-                                stage.minima_table.forEach(m => {
-                                    stageHtml += `<tr><td>${m.minimum_number}</td><td>${m.position_m}</td></tr>`;
-                                });
-                                stageHtml += '</tbody></table>';
-                            } else {
-                                stageHtml += '<p class="text-muted small">Таблица минимумов отсутствует или пуста.</p>';
-                            }
-                            stageHtml += `Среднее ΔL: ${stage.average_delta_l_m !== null && stage.average_delta_l_m !== undefined ? stage.average_delta_l_m + ' м' : 'Нет данных'}<br>`;
-                            stageHtml += '</div>';
-                            debugStagesDetailsEl.innerHTML += stageHtml;
-                        });
+                        if (debugStagesDetailsEl) {
+                            debugStagesDetailsEl.innerHTML = '';
+                            data.stages.forEach(stage => {
+                                let stageHtml = `<div class="mb-2 p-2 border rounded"><strong>Этап ${stage.stage_number} (Частота: ${stage.frequency_hz} Hz):</strong><br>`;
+                                if (stage.minima_table && stage.minima_table.length > 0) {
+                                    stageHtml += '<table class="table table-sm table-bordered w-auto"><thead><tr><th>№</th><th>L, м</th></tr></thead><tbody>';
+                                    stage.minima_table.forEach(m => {
+                                        stageHtml += `<tr><td>${m.minimum_number}</td><td>${m.position_m}</td></tr>`;
+                                    });
+                                    stageHtml += '</tbody></table>';
+                                } else {
+                                    stageHtml += '<p class="text-muted small">Таблица минимумов отсутствует или пуста.</p>';
+                                }
+                                stageHtml += `Среднее ΔL: ${stage.average_delta_l_m !== null && stage.average_delta_l_m !== undefined ? stage.average_delta_l_m + ' м' : 'Нет данных'}<br>`;
+                                stageHtml += '</div>';
+                                debugStagesDetailsEl.innerHTML += stageHtml;
+                            });
+                        }
 
                     } else {
                         debugInfoContainer.style.display = 'none';
@@ -141,207 +149,366 @@
                     chartsContainerEl.style.maxHeight = '800px';
                     chartsContainerEl.style.overflowY = 'auto';
 
+                    // --- НАЧАЛО ИЗМЕНЕНИЙ ДЛЯ ГРАФИКОВ ---
+                    let allChartsHtml = '';
+                    console.log('[ChartJS Setup] Начало генерации HTML для графиков.');
+
                     data.stages.forEach((stage, index) => {
-                        console.log(`Этап ${stage.stage_number}, данные минимумов из API:`, stage.minima_table);
+                        const chartCanvasId = 'chart-stage-' + stage.id;
+                        console.log('[ChartJS Setup] Генерация HTML для этапа ' + stage.stage_number + ' (ID: ' + stage.id + '), Canvas ID: ' + chartCanvasId);
+                        // Упрощенный HTML без переносов строк внутри строки JS, используем одинарные кавычки для HTML атрибутов
+                        allChartsHtml += '<div class="card mb-3"><div class="card-header">График для Этапа ' + stage.stage_number + ' (Частота: ' + stage.frequency_hz + ' Hz)</div><div class="card-body"><canvas id="' + chartCanvasId + '" style="height: 220px;"></canvas></div></div>';
+                    });
+
+                    chartsContainerEl.innerHTML = allChartsHtml;
+                    console.log('[ChartJS Setup] Весь HTML для графиков вставлен в DOM.');
+
+                    if (!window.charts) {
+                        window.charts = {};
+                        console.log('[ChartJS Setup] window.charts инициализирован.');
+                    }
+
+                    data.stages.forEach((stage, index) => {
+                        const chartCanvasId = 'chart-stage-' + stage.id;
+                        const canvasElement = document.getElementById(chartCanvasId);
+
+                        if (!canvasElement) {
+                            console.error('[ChartJS Init - Этап ' + stage.stage_number + '] Canvas элемент "' + chartCanvasId + '" НЕ НАЙДЕН в DOM после вставки HTML.');
+                            return;
+                        }
+                        console.log('[ChartJS Init - Этап ' + stage.stage_number + '] Canvas элемент "' + chartCanvasId + '" найден. Инициализация графика.');
+                        const ctx = canvasElement.getContext('2d');
+
+                        const datasets = [];
+                        let chartHasData = false;
+
+                        // 1. Полный аудиосигнал (основная линия)
+                        if (stage.full_signal_data && 
+                            Array.isArray(stage.full_signal_data) &&
+                            stage.full_signal_data.length > 0) {
+                            
+                            // Предполагаем, что full_signal_data это уже массив объектов {position: X, amplitude: Y}
+                            // Преобразуем в {x, y} для Chart.js
+                            const fullSignalPoints = stage.full_signal_data.map(p => ({
+                                x: p.position, // Убедитесь, что ключ 'position' правильный
+                                y: p.amplitude  // Убедитесь, что ключ 'amplitude' правильный
+                            }));
+
+                            console.log('[ChartJS Data - Этап ' + stage.stage_number + '] ПОЛНЫЙ СИГНАЛ (обработан): Длина ' + fullSignalPoints.length + '. Первые 3 точки: ' + JSON.stringify(fullSignalPoints.slice(0,3)));
+                            datasets.push({
+                                label: 'Амплитуда сигнала (Этап ' + stage.stage_number + ')',
+                                data: fullSignalPoints,
+                                borderColor: 'rgba(0, 123, 255, 0.8)',
+                                borderWidth: 1,
+                                pointRadius: 0, 
+                                fill: false,
+                                showLine: true,
+                                type: 'line', 
+                                tension: 0.1,
+                                order: 1 
+                            });
+                            chartHasData = true;
+                        } else {
+                            console.warn('[ChartJS Data - Этап ' + stage.stage_number + '] ПОЛНЫЙ СИГНАЛ: Данные отсутствуют, некорректны или неполны.', stage.full_signal_data);
+                        }
+
+                        // 2. Найденные минимумы (точки)
+                        let minimaSource = stage.minima; 
+                        if (!minimaSource && stage.minima_table) { 
+                            console.warn('[ChartJS Data - Этап ' + stage.stage_number + '] stage.minima отсутствует, используется stage.minima_table для минимумов.');
+                            minimaSource = stage.minima_table.map(m => ({ distance_cm: m.position_m, amplitude: m.amplitude })); // Предполагаем m.amplitude существует или = 0.01
+                        }
+
+                        if (minimaSource && Array.isArray(minimaSource) && minimaSource.length > 0) {
+                            const minimaPoints = minimaSource.map(m => ({
+                                x: m.distance_cm, // Убедитесь что это правильное поле для X
+                                y: (m.amplitude !== undefined && m.amplitude !== null) ? m.amplitude : 0.01 // Используем amplitude если есть, иначе 0.01
+                            }));
+                            console.log('[ChartJS Data - Этап ' + stage.stage_number + '] МИНИМУМЫ: Длина ' + minimaPoints.length + '. Первые 3 точки: ' + JSON.stringify(minimaPoints.slice(0,3)));
+                            datasets.push({
+                                label: 'Найденные минимумы (Этап ' + stage.stage_number + ')',
+                                data: minimaPoints,
+                                backgroundColor: 'rgba(255, 99, 132, 1)',
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                pointRadius: 5,
+                                pointHoverRadius: 7,
+                                showLine: false, 
+                                type: 'scatter', 
+                                order: 0 
+                            });
+                            chartHasData = true;
+                        } else {
+                             console.warn('[ChartJS Data - Этап ' + stage.stage_number + '] МИНИМУМЫ: Данные отсутствуют или пусты.', minimaSource);
+                        }
                         
-                        const chartId = `chart-stage-${stage.stage_number}`;
-                        
-                        chartsContainerEl.innerHTML += `
-                            <div class="card mb-3">
-                                <div class="card-header bg-light py-1">
-                                    <h5 class="mb-0">Этап ${stage.stage_number} (Частота: ${stage.frequency_hz} Hz)</h5>
-                                </div>
-                                <div class="card-body p-2">
-                                    <div class="chart-container" style="height: 180px;">
-                                        <canvas id="${chartId}"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-                        
-                        const minimaDataForChart = stage.minima_table ? stage.minima_table.map(m => ({
-                            position: m.position_m, 
-                            amplitude: m.amplitude !== undefined ? m.amplitude : 0.5 
-                        })) : [];
-                        
-                        console.log(`График ${chartId}, данные позиций/амплитуд для графика:`, minimaDataForChart);
-                        
-                        setTimeout(() => {
-                            if (minimaDataForChart.length > 0) {
-                                new Chart(document.getElementById(chartId), {
-                                    type: 'scatter',
-                                    data: {
-                                        datasets: [{
-                                            label: `Амплитуда сигнала (Этап ${stage.stage_number})`,
-                                            data: minimaDataForChart.map(m => ({
-                                                x: m.position,
-                                                y: m.amplitude
-                                            })),
-                                            backgroundColor: 'rgba(75, 192, 192, 0.7)',
-                                            borderColor: 'rgb(75, 192, 192)',
-                                            pointRadius: 5,
-                                            pointHoverRadius: 7
-                                        }]
-                                    },
-                                    options: {
-                                        animation: false, // Отключаем анимацию для повышения производительности
-                                        responsive: true,
-                                        maintainAspectRatio: false,
-                                        plugins: {
-                                            tooltip: {
-                                                callbacks: {
-                                                    label: function(context) {
-                                                        return `Позиция: ${context.raw.x}, Амплитуда: ${context.raw.y.toExponential(4)}`;
-                                                    }
-                                                }
+                        if (!chartHasData) {
+                            console.warn('[ChartJS Init - Этап ' + stage.stage_number + '] НЕТ ДАННЫХ для графика ' + chartCanvasId + '. Отрисовка отменена.');
+                            ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                            ctx.font = "16px Arial";
+                            ctx.fillStyle = "rgb(150,150,150)";
+                            ctx.textAlign = "center";
+                            ctx.fillText('Нет данных для отображения графика.', canvasElement.width / 2, canvasElement.height / 2);
+                            return; // Не создаем/обновляем график, если нет данных
+                        }
+
+                        console.log('[ChartJS Init - Этап ' + stage.stage_number + '] Попытка создания графика ' + chartCanvasId + ' с данными:', {datasets: datasets});
+
+                        if (window.charts[chartCanvasId]) {
+                            window.charts[chartCanvasId].data.datasets = datasets;
+                            window.charts[chartCanvasId].update();
+                        } else {
+                            window.charts[chartCanvasId] = new Chart(ctx, {
+                                // Тип графика по умолчанию будет 'line', но datasets могут его переопределить
+                                data: {
+                                    datasets: datasets
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    scales: {
+                                        x: {
+                                            type: 'linear',
+                                            position: 'bottom',
+                                            title: {
+                                                display: true,
+                                                text: 'Положение трубы (см)'
                                             },
-                                            legend: {
-                                                position: 'top',
-                                                labels: {
-                                                    boxWidth: 12,
-                                                    font: {
-                                                        size: 11
-                                                    }
-                                                },
-                                                display: true
+                                            ticks: {
+                                                callback: function(value, index, ticks) {
+                                                    return (value * 100).toFixed(0);
+                                                }
                                             }
                                         },
-                                        scales: {
-                                            x: {
-                                                title: {
-                                                    display: true,
-                                                    text: 'Позиция',
-                                                    font: {
-                                                        size: 10
-                                                    }
-                                                },
-                                                ticks: {
-                                                    font: {
-                                                        size: 10
-                                                    }
-                                                }
+                                        y: {
+                                            beginAtZero: true,
+                                            title: {
+                                                display: true,
+                                                text: 'Амплитуда (отн. ед.)'
+                                            }
+                                        }
+                                    },
+                                    plugins: {
+                                        zoom: {
+                                            pan: {
+                                                enabled: true,
+                                                mode: 'xy'
                                             },
-                                            y: {
-                                                title: {
-                                                    display: true,
-                                                    text: 'Амплитуда',
-                                                    font: {
-                                                        size: 10
-                                                    }
+                                            zoom: {
+                                                wheel: {
+                                                    enabled: true,
                                                 },
-                                                ticks: {
-                                                    font: {
-                                                        size: 10
-                                                    },
-                                                    callback: function(value) {
-                                                        return value.toExponential(1);
+                                                pinch: {
+                                                    enabled: true
+                                                },
+                                                mode: 'xy',
+                                            }
+                                        },
+                                        tooltip: {
+                                            callbacks: {
+                                                label: function(context) {
+                                                    let label = context.dataset.label || '';
+                                                    if (label) {
+                                                        label += ': ';
                                                     }
+                                                    if (context.parsed.y !== null) {
+                                                        label += `Ампл.: ${context.parsed.y.toFixed(4)}`;
+                                                    }
+                                                    if (context.parsed.x !== null) {
+                                                        label += `, Поз.: ${(context.parsed.x * 100).toFixed(1)} см`;
+                                                    }
+                                                    return label;
                                                 }
                                             }
                                         }
                                     }
-                                });
-                                console.log(`График амплитуды ${chartId} успешно создан`);
-                            } else {
-                                const chartElement = document.getElementById(chartId);
-                                if (chartElement) {
-                                    chartElement.outerHTML = `<div class="alert alert-warning text-center p-1 small">Нет данных для построения графика.</div>`;
                                 }
-                            }
-                        }, 0);
+                            });
+                        }
+                        console.log('[ChartJS Init - Этап ' + stage.stage_number + '] График ' + chartCanvasId + ' успешно создан/обновлен.');
                     });
+                    // --- КОНЕЦ ИЗМЕНЕНИЙ ДЛЯ ГРАФИКОВ ---
+
+
+                    // Обновление состояния формы и сообщения
+                    const studentSpeedInput = document.getElementById('student-speed');
+                    const studentGammaInput = document.getElementById('student-gamma');
+                    const submitButton = studentResultsForm.querySelector('button[type="submit"]');
+
+                    // Заполняем поля, если есть данные от студента (даже если статус fail)
+                    if (data.student_submitted_results) {
+                        if (data.student_submitted_results.speed_of_sound !== null) {
+                            studentSpeedInput.value = data.student_submitted_results.speed_of_sound;
+                        }
+                        if (data.student_submitted_results.gamma !== null) {
+                            studentGammaInput.value = data.student_submitted_results.gamma;
+                        }
+                    }
+                    
+                    // Логика блокировки полей и отображения сообщений
+                    if (data.results_processing_status === 'success' || data.results_processing_status === 'final_completed') { 
+                        console.log('[Form State] Эксперимент успешно завершен. Заполняем и блокируем поля.');
+                        studentSpeedInput.disabled = true;
+                        studentGammaInput.disabled = true;
+                        if (submitButton) { // Добавлена проверка на существование кнопки
+                            submitButton.disabled = true;
+                            submitButton.textContent = 'Результаты приняты';
+                        }
+                        
+                        const speedErrorDisplay = data.error_percent_speed !== null && data.error_percent_speed !== undefined
+                                                  ? data.error_percent_speed + '%'
+                                                  : 'нет данных';
+                        const gammaErrorDisplay = data.error_percent_gamma !== null && data.error_percent_gamma !== undefined
+                                                  ? data.error_percent_gamma + '%'
+                                                  : 'нет данных';
+                        
+                        const studentSpeedDisplay = data.student_submitted_results?.speed_of_sound ?? 'N/A';
+                        const studentGammaDisplay = data.student_submitted_results?.gamma ?? 'N/A';
+
+                        formMessageEl.innerHTML = `
+                            <div class="alert alert-success">
+                                <strong>Успех!</strong> Ваши результаты (${studentSpeedDisplay} м/с, γ=${studentGammaDisplay}) приняты.
+                                <br>Отклонение от системных значений:
+                                Скорость: ${speedErrorDisplay},
+                                Гамма: ${gammaErrorDisplay}.
+                            </div>`;
+                    } else if (data.results_processing_status === 'fail') {
+                        console.log('[Form State] Эксперимент завершен со статусом "fail". Поля остаются активными.');
+                        studentSpeedInput.disabled = false;
+                        studentGammaInput.disabled = false;
+                        if (submitButton) { // Добавлена проверка
+                           submitButton.disabled = false;
+                           submitButton.textContent = 'Отправить результаты'; // Исходный текст кнопки
+                        }
+
+                        const genericFailMessage = "Ваши результаты не приняты. Отклонение от рассчитанных системой значений составило >5%.";
+                        formMessageEl.innerHTML = `<div class="alert alert-danger">${genericFailMessage}</div>`;
+                        
+                    } else if (data.results_processing_status === 'pending_student_input' || data.results_processing_status === null || data.results_processing_status === undefined) {
+                        console.log('[Form State] Эксперимент ожидает ввода данных студентом. Поля активны.');
+                        studentSpeedInput.disabled = false;
+                        studentGammaInput.disabled = false;
+                        if (submitButton) { // Добавлена проверка
+                            submitButton.disabled = false;
+                            submitButton.textContent = 'Отправить результаты';
+                        }
+                        formMessageEl.innerHTML = '<div class="alert alert-info">Введите рассчитанные значения и отправьте результаты.</div>';
+                    } else {
+                        // Неизвестный статус, поля активны по умолчанию
+                        console.warn('[Form State] Неизвестный статус обработки результатов: ' + data.results_processing_status + '. Поля активны.');
+                        studentSpeedInput.disabled = false;
+                        studentGammaInput.disabled = false;
+                        if (submitButton) { // Добавлена проверка
+                           submitButton.disabled = false;
+                           submitButton.textContent = 'Отправить результаты';
+                        }
+                        formMessageEl.innerHTML = '<div class="alert alert-warning">Не удалось определить статус обработки. Поля ввода активны.</div>';
+                    }
+
 
                 } else {
+                    experimentDataLoading.style.display = 'none';
                     experimentDataError.textContent = data.message || 'Произошла ошибка при загрузке данных.';
                     experimentDataError.style.display = 'block';
                 }
             })
             .catch(error => {
-                console.error('Error fetching experiment data:', error);
+                console.error('Ошибка при получении данных эксперимента:', error);
                 experimentDataLoading.style.display = 'none';
-                experimentDataError.textContent = `Ошибка сети или сервера: ${error.message}. Пожалуйста, проверьте ваше подключение или попробуйте позже.`;
+                experimentDataError.textContent = `Ошибка сети или сервера: ${error.message}. Попробуйте обновить страницу.`;
                 experimentDataError.style.display = 'block';
             });
 
         studentResultsForm.addEventListener('submit', function(event) {
             event.preventDefault();
-            formMessageEl.textContent = ''; // Очищаем предыдущие сообщения
-            formMessageEl.className = 'mt-3'; // Сбрасываем классы
+            formMessageEl.innerHTML = '<div class="alert alert-info">Отправка результатов...</div>';
+            const studentSpeed = document.getElementById('student-speed').value;
+            const studentGamma = document.getElementById('student-gamma').value;
+            const submitButtonInForm = studentResultsForm.querySelector('button[type="submit"]'); // Переименована переменная во избежание конфликта
 
-            const formData = new FormData(studentResultsForm); // Используем FormData для CSRF и значений
-            const studentSpeed = formData.get('student_speed');
-            const studentGamma = formData.get('student_gamma');
+            if (submitButtonInForm) { // Добавлена проверка
+                submitButtonInForm.disabled = true;
+            }
 
-            // Исправленный URL: убираем /lab_data в начале
-            fetch(`/api/experiment/${experimentId}/save-results/`, {
+            fetch(`/test-save-results/${experimentId}/`, { // Изменено на тестовый URL
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRFToken': formData.get('csrfmiddlewaretoken') // CSRF из скрытого поля формы
+                    'X-CSRFToken': getCSRFToken() 
                 },
                 body: JSON.stringify({
-                    student_speed: studentSpeed ? parseFloat(studentSpeed) : null, // Преобразуем в число или null
-                    student_gamma: studentGamma ? parseFloat(studentGamma) : null  // Преобразуем в число или null
+                    student_speed: parseFloat(studentSpeed),
+                    student_gamma: parseFloat(studentGamma)
                 })
             })
-            .then(response => response.json()) // Ожидаем JSON в любом случае
+            .then(response => response.json())
             .then(data => {
-                if (data.status === 'success') {
-                    formMessageEl.textContent = 'Ваши результаты успешно отправлены! ' + (data.message || '');
-                    formMessageEl.className = 'alert alert-success mt-3';
-                    // studentResultsForm.reset(); // Можно раскомментировать, если нужно очищать форму
+                console.log("Ответ от save_results:", data);
+                const speedInput = document.getElementById('student-speed'); // Получаем элементы заново
+                const gammaInput = document.getElementById('student-gamma');
+                const currentSubmitButton = studentResultsForm.querySelector('button[type="submit"]'); // Получаем кнопку заново
+
+                if (data.status === 'success' && data.results_status) { 
+                    if (speedInput) speedInput.disabled = (data.results_status === 'success' || data.results_status === 'final_completed');
+                    if (gammaInput) gammaInput.disabled = (data.results_status === 'success' || data.results_status === 'final_completed');
+                    if (currentSubmitButton) currentSubmitButton.disabled = (data.results_status === 'success' || data.results_status === 'final_completed');
                     
-                    const submitButton = studentResultsForm.querySelector('button[type="submit"]');
-                    const retryButtonContainer = document.getElementById('retry-button-container');
+                    if (data.results_status === 'success' || data.results_status === 'final_completed') {
+                        if (currentSubmitButton) currentSubmitButton.textContent = 'Результаты приняты';
+                        
+                        // Формируем сообщение об отклонениях
+                        let deviationMessage = '';
+                        const speedError = data.error_percent_speed !== null && data.error_percent_speed !== undefined 
+                                           ? data.error_percent_speed + '%' 
+                                           : 'нет данных';
+                        const gammaError = data.error_percent_gamma !== null && data.error_percent_gamma !== undefined 
+                                           ? data.error_percent_gamma + '%' 
+                                           : 'нет данных';
 
-
-                    if (data.results_status === 'fail') {
-                        if (data.comparison_message) {
-                            formMessageEl.innerHTML += `<br>${data.comparison_message}`; // Используем innerHTML для <br>
+                        if (data.student_values && data.system_values) { // Отображаем полные детали, если есть
+                             deviationMessage = `<br>Ваши значения: Скорость ${data.student_values.speed} м/с, γ=${data.student_values.gamma}.<br>Системные значения: Скорость ${data.system_values.speed !== null ? data.system_values.speed + ' м/с' : 'N/A'}, γ=${data.system_values.gamma !== null ? data.system_values.gamma : 'N/A'}.<br>Отклонение: Скорость: ${speedError}, Гамма: ${gammaError}.`;
+                        } else { // Базовое сообщение, если нет полных данных (маловероятно при успехе, но для подстраховки)
+                             deviationMessage = `<br>Отклонение от системных значений: Скорость: ${speedError}, Гамма: ${gammaError}.`;
                         }
-                        if (submitButton) submitButton.disabled = false; // Разблокируем кнопку отправки
-
-                        if (retryButtonContainer) {
-                             // Показываем контейнер и кнопку (если кнопка уже там)
-                            retryButtonContainer.style.display = 'block';
-                            // Если кнопки "Пересдать" еще нет, ее можно создать и добавить сюда
-                            // или предполагаем, что она уже есть в HTML и просто скрыта.
-                            // Пример создания кнопки, если ее нет:
-                            // if (!document.getElementById('retry-experiment-button')) {
-                            //    const retryBtn = document.createElement('a');
-                            //    retryBtn.href = `/lab_data/experiment/${experimentId}/retry/`;
-                            //    retryBtn.className = 'btn btn-warning mt-2';
-                            //    retryBtn.id = 'retry-experiment-button';
-                            //    retryBtn.textContent = 'Пересдать эксперимент';
-                            //    retryButtonContainer.appendChild(retryBtn);
-                            // }
+                        
+                        formMessageEl.innerHTML = `
+                            <div class="alert alert-success">
+                                <strong>Успех!</strong> ${data.message || 'Ваши результаты приняты.'}
+                                ${deviationMessage}
+                            </div>`;
+                    } else if (data.results_status === 'fail') {
+                        if (currentSubmitButton) {
+                            currentSubmitButton.disabled = false; 
+                            currentSubmitButton.textContent = 'Отправить результаты';
                         }
-                         // Показываем кнопку "Пересдать" (предполагая, что она есть и имеет ID 'retry-experiment-button')
-                        const retryBtnElement = document.getElementById('retry-experiment-button');
-                        if (retryBtnElement) {
-                            retryBtnElement.style.display = 'inline-block';
+                        const genericFailMessageForSubmit = "Ваши результаты не приняты. Отклонение от рассчитанных системой значений составило >5%.";
+                        formMessageEl.innerHTML = `
+                            <div class="alert alert-danger">
+                                ${genericFailMessageForSubmit}
+                            </div>`;
+                    } else { 
+                        if (currentSubmitButton) {
+                             currentSubmitButton.disabled = false;
+                             currentSubmitButton.textContent = 'Отправить результаты';
                         }
-
-
-                    } else if (data.results_status === 'success'){
-                        if (submitButton) submitButton.disabled = true; // Блокируем кнопку после успешной сдачи
-                        if (retryButtonContainer) retryButtonContainer.style.display = 'none'; // Скрываем кнопку "Пересдать"
-                        const retryBtnElement = document.getElementById('retry-experiment-button');
-                        if (retryBtnElement) {
-                             retryBtnElement.style.display = 'none';
-                        }
+                        formMessageEl.innerHTML = `<div class="alert alert-info">${data.message || 'Статус не определен, попробуйте снова.'}</div>`;
                     }
                 } else {
-                    formMessageEl.textContent = 'Ошибка при отправке: ' + (data.message || 'Проверьте введенные данные.');
-                    formMessageEl.className = 'alert alert-danger mt-3';
+                    formMessageEl.innerHTML = `<div class="alert alert-danger">Ошибка при сохранении: ${data.message || 'Проверьте введенные данные или попробуйте позже.'}</div>`;
+                    if (currentSubmitButton) currentSubmitButton.disabled = false; 
                 }
             })
             .catch(error => {
-                formMessageEl.textContent = 'Сетевая ошибка или ошибка сервера при отправке результатов. Проверьте консоль для деталей.';
-                formMessageEl.className = 'alert alert-danger mt-3';
-                console.error('Error submitting results:', error);
+                console.error('Ошибка при отправке результатов:', error);
+                formMessageEl.innerHTML = '<div class="alert alert-danger">Сетевая ошибка при отправке результатов.</div>';
+                const currentSubmitButton = studentResultsForm.querySelector('button[type="submit"]');
+                if (currentSubmitButton) currentSubmitButton.disabled = false;
             });
         });
+
+        function getCSRFToken() {
+            const tokenInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+            return tokenInput ? tokenInput.value : ''; // Добавлена проверка на существование элемента
+        }
     });
 </script>
 {% endblock %} 

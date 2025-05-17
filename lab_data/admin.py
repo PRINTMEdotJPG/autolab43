@@ -6,7 +6,6 @@ from .models import (
     Experiments, 
     EquipmentData, 
     Results, 
-    Protocols, 
     Calculations
 )
 
@@ -22,23 +21,19 @@ class ResultsInline(admin.StackedInline):
     extra = 0
     fields = (
         'gamma_calculated', 
+        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent', 
+        'error_percent_gamma',
+        'error_percent_speed',
         'status',
         'detailed_results'
     )
     readonly_fields = fields
 
-class ProtocolsInline(admin.TabularInline):
-    model = Protocols
-    extra = 0
-    fields = ('generated_at', 'protocol_path', 'status')
-    readonly_fields = ('generated_at',)
-
 class CalculationsInline(admin.TabularInline):
     model = Calculations
     extra = 0
-    fields = ('step_number', 'description', 'formula_used', 'timestamp')
+    fields = ('step_number', 'description', 'formula_used', 'input_data', 'output_data', 'timestamp')
     readonly_fields = ('timestamp',)
 
 @admin.register(User)
@@ -107,11 +102,40 @@ class CustomUserAdmin(UserAdmin):
 
 @admin.register(Experiments)
 class ExperimentsAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'created_at', 'temperature', 'tube_length')  # Changed 'date' to 'created_at'
-    list_filter = ('user', 'created_at')  # Changed 'date' to 'created_at'
-    search_fields = ('user__email', 'user__full_name')
-    date_hierarchy = 'created_at'  # Changed 'date' to 'created_at'
-    inlines = [EquipmentDataInline, ResultsInline, ProtocolsInline, CalculationsInline]
+    list_display = (
+        'id',
+        'user',
+        'assistant',
+        'status',
+        'created_at',
+        'completed_at',
+        'temperature',
+        'system_speed_of_sound',
+        'error_percent_speed',
+        'system_gamma',
+        'error_percent_gamma'
+    )
+    list_filter = ('status', 'user', 'assistant', 'created_at')
+    search_fields = ('id', 'user__full_name', 'user__email', 'assistant__full_name')
+    readonly_fields = ('created_at', 'completed_at')
+    fieldsets = (
+        (None, {
+            'fields': ('user', 'assistant', 'status', 'step')
+        }),
+        ('Параметры эксперимента', {
+            'fields': ('temperature', 'tube_length', 'stages')
+        }),
+        ('Результаты студента', {
+            'fields': ('student_speed', 'student_gamma')
+        }),
+        ('Расчетные системные значения и ошибки', {
+            'fields': ('system_speed_of_sound', 'system_gamma', 'error_percent_speed', 'error_percent_gamma')
+        }),
+        ('Даты', {
+            'fields': ('created_at', 'completed_at')
+        }),
+    )
+    inlines = [EquipmentDataInline, ResultsInline, CalculationsInline]
 
 @admin.register(EquipmentData)
 class EquipmentDataAdmin(admin.ModelAdmin):
@@ -127,8 +151,10 @@ class ResultsAdmin(admin.ModelAdmin):
         'student_speed',
         'student_gamma',
         'gamma_calculated', 
+        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent', 
+        'error_percent_gamma',
+        'error_percent_speed',
         'status'
     )
     list_filter = ('status',)
@@ -138,16 +164,11 @@ class ResultsAdmin(admin.ModelAdmin):
         'student_speed',
         'student_gamma',
         'gamma_calculated', 
+        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent'
+        'error_percent_gamma',
+        'error_percent_speed'
     )
-
-@admin.register(Protocols)
-class ProtocolsAdmin(admin.ModelAdmin):
-    list_display = ('id', 'experiment', 'generated_at', 'status', 'protocol_path')
-    list_filter = ('status', 'generated_at')
-    search_fields = ('experiment__id',)
-    date_hierarchy = 'generated_at'
 
 @admin.register(Calculations)
 class CalculationsAdmin(admin.ModelAdmin):

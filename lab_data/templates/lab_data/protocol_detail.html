@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Протокол эксперимента #{{ experiment_id }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{% url 'home' %}">Главная</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Протокол эксперимента #{{ experiment_id }}</li>
+        </ol>
+    </nav>
+
+    <h2 class="mb-4">Протокол эксперимента #{{ experiment_id }}</h2>
+
+    <div class="card">
+        <div class="card-header">
+            Информация об эксперименте от {{ experiment_creation_date|date:"d.m.Y H:i" }}
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Студент:</strong></div>
+                <div class="col-md-8">{{ student_full_name }}</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Группа:</strong></div>
+                <div class="col-md-8">{{ student_group }}</div>
+            </div>
+            <hr>
+            <h5 class="mt-4 mb-3">Результаты студента:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Введенная скорость звука:</strong></div>
+                <div class="col-md-8">{{ student_provided_speed }} м/с</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Введенное значение γ:</strong></div>
+                <div class="col-md-8">{{ student_provided_gamma }}</div>
+            </div>
+            <hr>
+            <h5 class="mt-4 mb-3">Расчетные значения системы:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Рассчитанная скорость звука:</strong></div>
+                <div class="col-md-8">{{ system_calculated_speed }} м/с</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Рассчитанное значение γ:</strong></div>
+                <div class="col-md-8">{{ system_calculated_gamma }}</div>
+            </div>
+            <hr>
+            <h5 class="mt-4 mb-3">Отклонения:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Отклонение по скорости звука:</strong></div>
+                <div class="col-md-8">{{ error_percent_speed }}%</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Отклонение по γ:</strong></div>
+                <div class="col-md-8">{{ error_percent_gamma }}%</div>
+            </div>
+            <hr>
+            <div class="row mt-4">
+                <div class="col-md-4"><strong>Итоговый результат эксперимента:</strong></div>
+                <div class="col-md-8">
+                    <strong>
+                        {% if experiment_status_protocol == "Завершен (успешно)" %}
+                            <span class="badge bg-success fs-6">{{ experiment_status_protocol }}</span>
+                        {% elif experiment_status_protocol == "Провал" or "Провален" in experiment_status_protocol %}
+                            <span class="badge bg-danger fs-6">{{ experiment_status_protocol }}</span>
+                        {% elif experiment_status_protocol == "В процессе выполнения студентом" or experiment_status_protocol == "Ожидает ввода студента" %}
+                            <span class="badge bg-warning text-dark fs-6">{{ experiment_status_protocol }}</span>
+                        {% else %}
+                            <span class="badge bg-info fs-6">{{ experiment_status_protocol }}</span>
+                        {% endif %}
+                    </strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <a href="{% url 'home' %}" class="btn btn-secondary">Назад к панели</a>
+        {# Тут можно добавить кнопку для генерации PDF, если потребуется в будущем #}
+        {# <a href="{% url 'download_protocol_pdf' experiment_id %}" class="btn btn-primary">Скачать PDF</a> #}
+    </div>
+
+</div>
+{% endblock %} 

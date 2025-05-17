@@ -247,6 +247,7 @@ class Experiments(models.Model):
         ('stage_2', 'Этап 2 — запись'),  # Аналогично
         ('stage_3', 'Этап 3 — запись'),
         ('completed', 'Завершен'),
+        ('failed', 'Провальный'),
         ('aborted', 'Прерван'),
     ]
     
@@ -270,9 +271,12 @@ class Experiments(models.Model):
     
     
     system_gamma = models.FloatField(null=True)
-    error_percent = models.FloatField(null=True)
+    system_speed_of_sound = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # Новое поле
+    error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True) # Переименовано и уточнено
+    error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True) # Новое поле
 
     created_at = models.DateTimeField(auto_now_add=True)  # Заменить date
+    completed_at = models.DateTimeField(verbose_name="Дата и время завершения", null=True, blank=True) # Добавлено поле
 
     class Meta:
         verbose_name = "Эксперимент"
@@ -313,19 +317,21 @@ class Results(models.Model):
     """Модель для хранения результатов экспериментов."""
 
     STATUS_CHOICES = [
-        ('success', 'Успешно'), # Студент отправил, ошибка в пределах нормы
-        ('fail', 'Неудача'),    # Студент отправил, ошибка большая
-        ('pending_student_input', 'Ожидает ввода студента'), # Лаборант завершил, ждем студента
-        ('completed_by_assistant', 'Завершен лаборантом'), # Промежуточный статус, если нужен до pending_student_input
-        ('final_completed', 'Полностью завершен') # Все данные есть, включая студенческие
+        ('success', 'Успешно'),
+        ('fail', 'Провальный'),
+        ('pending_student_input', 'Ожидает ввода студента'),
+        ('completed_by_assistant', 'Завершен лаборантом'),
+        ('final_completed', 'Полностью завершен')
     ]
 
     experiment = models.OneToOneField(Experiments, on_delete=models.CASCADE, primary_key=True)
     gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ (система)", default=0.0) # Переименовал для ясности
+    speed_of_sound_calculated = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # Новое поле
     gamma_reference = models.FloatField(verbose_name="Эталонное γ", default=1.4)
     student_gamma = models.FloatField(verbose_name="Студенческое γ", null=True, blank=True)
     student_speed = models.FloatField(verbose_name="Студенческая скорость звука (м/с)", null=True, blank=True) # Добавим поле
-    error_percent = models.FloatField(verbose_name="Отклонение γ студента от эталона (%)", null=True, blank=True, help_text="Процент ошибки, может быть NULL")
+    error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True, help_text="Процент ошибки гамма, может быть NULL") # Переименовано и уточнено
+    error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True, help_text="Процент ошибки скорости, может быть NULL") # Новое поле
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending_student_input')
     visualization_data = models.JSONField(default=dict) # Может хранить данные для графиков студента, если они отличаются
     detailed_results = models.JSONField(default=list) # Данные по этапам от консумера
@@ -335,45 +341,7 @@ class Results(models.Model):
         verbose_name_plural = "Результаты"
 
     def __str__(self) -> str:
-        return f"Результат эксперимента #{self.experiment.id} ({self.get_status_display()})"
-
-
-class Protocols(models.Model):
-    """Модель для хранения протоколов экспериментов."""
-
-    STATUS_CHOICES = [
-        ('draft', 'Черновик'),
-        ('final', 'Финальный'),
-    ]
-
-    experiment = models.ForeignKey(
-        Experiments,
-        on_delete=models.CASCADE,
-        related_name='protocols',
-        verbose_name="Эксперимент"
-    )
-    generated_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name="Дата генерации"
-    )
-    protocol_path = models.CharField(
-        max_length=255,
-        verbose_name="Путь к протоколу"
-    )
-    status = models.CharField(
-        max_length=10,
-        choices=STATUS_CHOICES,
-        default='draft',
-        verbose_name="Статус"
-    )
-
-    class Meta:
-        verbose_name = "Протокол"
-        verbose_name_plural = "Протоколы"
-        ordering = ['-generated_at']
-
-    def __str__(self) -> str:
-        return f"Протокол #{self.id} ({self.get_status_display()})"
+        return f"Результаты для эксперимента #{self.experiment.id} ({self.status})"
 
 
 class Calculations(models.Model):

@@ -327,17 +327,19 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 self.sample_rate = decoded_sample_rate 
                 filtered_samples = self.apply_butterworth_filter(samples, self.sample_rate)
                 
-                minima = self.find_minima(filtered_samples, self.sample_rate, distances_cm, timestamps, step)
+                # ИЗМЕНЕНИЕ: find_minima теперь возвращает словарь
+                processed_data_for_stage = self.find_minima(filtered_samples, self.sample_rate, distances_cm, timestamps, step)
                 
                 if not isinstance(self.experiment_steps[step_index], dict):
                      self.experiment_steps[step_index] = {}
 
                 self.experiment_steps[step_index].update({
-                    # 'audio_samples': samples.tolist() if samples is not None else None, # Удалено для уменьшения размера данных и предотвращения проблем сохранения
-                    'minima': minima, 
+                    'minima': processed_data_for_stage['minima_points'], 
                     'status': 'audio_processed',
                     'distance_samples_cm': distances_cm, 
-                    'distance_timestamps': timestamps
+                    'distance_timestamps': timestamps,
+                    'graph_distances_cm': processed_data_for_stage['signal_distances_cm'], # НОВОЕ ПОЛЕ
+                    'graph_amplitudes': processed_data_for_stage['signal_amplitudes']    # НОВОЕ ПОЛЕ
                 })
 
                 current_step_params = self.experiment_steps[step_index]
@@ -368,10 +370,27 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 await database_sync_to_async(self.experiment.save)()
                 logger.info(f"Данные шага {step} (включая аудио, минимумы, расстояния) сохранены в БД.")
 
+                # --- НАЧАЛО БЛОКА ПРОВЕРКИ СОХРАНЕННЫХ ДАННЫХ ---
+                try:
+                    saved_experiment_check = await database_sync_to_async(Experiments.objects.get)(id=self.experiment_id)
+                    if saved_experiment_check and isinstance(saved_experiment_check.stages, list) and step_index < len(saved_experiment_check.stages):
+                        saved_stage_data = saved_experiment_check.stages[step_index]
+                        if isinstance(saved_stage_data, dict):
+                            len_saved_distances = len(saved_stage_data.get('graph_distances_cm', []))
+                            len_saved_amplitudes = len(saved_stage_data.get('graph_amplitudes', []))
+                            logger.info(f"[ПРОВЕРКА ПОСЛЕ SAVE, Exp {self.experiment_id}, Stage {step}] Длина сохраненных graph_distances_cm: {len_saved_distances}, graph_amplitudes: {len_saved_amplitudes}")
+                        else:
+                            logger.warning(f"[ПРОВЕРКА ПОСЛЕ SAVE, Exp {self.experiment_id}, Stage {step}] Сохраненные данные этапа не являются словарем.")
+                    else:
+                        logger.warning(f"[ПРОВЕРКА ПОСЛЕ SAVE, Exp {self.experiment_id}, Stage {step}] Не удалось извлечь сохраненные данные этапа для проверки.")
+                except Exception as e_check:
+                    logger.error(f"[ПРОВЕРКА ПОСЛЕ SAVE, Exp {self.experiment_id}, Stage {step}] Ошибка при проверке сохраненных данных: {e_check}")
+                # --- КОНЕЦ БЛОКА ПРОВЕРКИ СОХРАНЕННЫХ ДАННЫХ ---
+
                 response = {
                     'type': 'minima_data',
                     'step': int(step),
-                    'minima': minima, 
+                    'minima': processed_data_for_stage['minima_points'], 
                     'frequency': float(current_step_params['frequency']),
                     'temperature': float(current_step_params['temperature'])
                 }
@@ -973,10 +992,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
             
             if audio_samples is None or audio_len < 100:
                 logger.warning(f"[Step {current_step_num}] Слишком короткий или отсутствующий аудиосигнал ({audio_len}) для анализа минимумов.")
-                return []
+                # ИЗМЕНЕНИЕ: Возвращаем словарь с пустыми значениями
+                return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] }
             
             if distances_cm is None or not distances_cm or distance_timestamps is None or not distance_timestamps or dist_len != ts_len:
                 logger.warning(f"[Step {current_step_num}] Отсутствуют, неполные или несогласованные данные о расстоянии. dist_len={dist_len}, ts_len={ts_len}. Вызов резервного метода.")
+                # ИЗМЕНЕНИЕ: _find_minima_by_signal также должен возвращать аналогичный словарь
                 return self._find_minima_by_signal(audio_samples, sample_rate, distances_cm, distance_timestamps, current_step_num)
 
             # 1. Предобработка аудио
@@ -999,7 +1020,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 # max_amp_robust = np.max(amplitude_envelope) # Попробуем абсолютный максимум в этом случае - УЖЕ СДЕЛАНО
                 # if max_amp_robust == 0:
                 logger.warning(f"[Step {current_step_num}] Максимальная амплитуда огибающей равна нулю. Невозможно нормализовать.")
-                return []
+                # ИЗМЕНЕНИЕ: Возвращаем словарь с пустыми значениями
+                return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] }
                 # else:
                 #    logger.warning(f"[Step {current_step_num}] 99-й процентиль амплитуды огибающей равен 0, используется абсолютный максимум: {max_amp_robust:.4f}")
             else:
@@ -1057,6 +1079,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             if len(target_interp_times) < 2: # Нужно хотя бы 2 точки для интерполяции и find_peaks
                 logger.warning(f"[Step {current_step_num}] Недостаточно валидных точек ({len(target_interp_times)}) для интерполяции после обрезки по времени аудио. Вызов резервного метода.")
+                # ИЗМЕНЕНИЕ: _find_minima_by_signal также должен возвращать аналогичный словарь
                 return self._find_minima_by_signal(audio_samples, sample_rate, distances_cm, distance_timestamps, current_step_num)
 
             from scipy.interpolate import interp1d
@@ -1067,6 +1090,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 amplitude_at_distance_times = amplitude_interpolator(target_interp_times)
             except ValueError as ve:
                 logger.error(f"[Step {current_step_num}] Ошибка интерполяции: {ve}", exc_info=True)
+                # ИЗМЕНЕНИЕ: _find_minima_by_signal также должен возвращать аналогичный словарь
                 return self._find_minima_by_signal(audio_samples, sample_rate, distances_cm, distance_timestamps, current_step_num)
 
             # 4. Поиск пиков (минимумов в исходной амплитуде)
@@ -1139,13 +1163,67 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 current_step_num
             )
             
-            return minima_list
+            # --- НОВЫЙ БЛОК ДЛЯ ПОДГОТОВКИ ДАННЫХ ВСЕГО СИГНАЛА ---
+            final_graph_distances_cm = []
+            final_graph_amplitudes = []
+            DOWNSAMPLE_FACTOR = 10 # Прореживание, чтобы не перегружать клиент
+            logger.info(f"[Step {current_step_num}] Подготовка данных для полного графика. DOWNSAMPLE_FACTOR={DOWNSAMPLE_FACTOR}")
+
+            if audio_time_axis_sec is not None and len(audio_time_axis_sec) > 0 and \
+               normalized_envelope is not None and len(normalized_envelope) == len(audio_time_axis_sec):
+                
+                logger.debug(f"[Step {current_step_num}] Исходные данные для полного графика: audio_time_axis_sec length={len(audio_time_axis_sec)}, normalized_envelope length={len(normalized_envelope)}")
+                logger.debug(f"[Step {current_step_num}] audio_time_axis_sec (first 5): {audio_time_axis_sec[:5]}")
+                logger.debug(f"[Step {current_step_num}] normalized_envelope (first 5): {normalized_envelope[:5]}")
+
+                # Интерполяция расстояний для ВСЕЙ временной оси аудио
+                graph_signal_distances_cm_calculated = np.full_like(audio_time_axis_sec, np.nan) # По умолчанию NaN
+                
+                logger.debug(f"[Step {current_step_num}] Данные для интерполятора расстояний: sorted_dist_ts length={len(sorted_dist_ts)}, sorted_dist_cm length={len(sorted_dist_cm)}")
+                if len(sorted_dist_ts) > 0: # Логируем даже если < 2, чтобы видеть что там
+                    logger.debug(f"[Step {current_step_num}] sorted_dist_ts (first 5): {sorted_dist_ts[:5]}")
+                    logger.debug(f"[Step {current_step_num}] sorted_dist_cm (first 5): {sorted_dist_cm[:5]}")
+
+                if len(sorted_dist_ts) >= 2 : # sorted_dist_ts и sorted_dist_cm подготовлены ранее
+                    try:
+                        distance_interpolator_for_graph = interp1d(
+                            sorted_dist_ts, 
+                            sorted_dist_cm,
+                            kind='linear', 
+                            bounds_error=False, 
+                            # Используем fill_value для крайних значений, если audio_time_axis_sec выходит за пределы sorted_dist_ts
+                            fill_value=(sorted_dist_cm[0], sorted_dist_cm[-1]) 
+                        )
+                        graph_signal_distances_cm_calculated = distance_interpolator_for_graph(audio_time_axis_sec)
+                        logger.info(f"[Step {current_step_num}] Интерполяция расстояний для полного графика выполнена. graph_signal_distances_cm_calculated length={len(graph_signal_distances_cm_calculated)}")
+                        logger.debug(f"[Step {current_step_num}] graph_signal_distances_cm_calculated (first 5 after interp): {graph_signal_distances_cm_calculated[:5]}")
+                        # Логирование количества NaN значений
+                        nan_count_distances = np.sum(np.isnan(graph_signal_distances_cm_calculated))
+                        logger.debug(f"[Step {current_step_num}] Количество NaN в graph_signal_distances_cm_calculated: {nan_count_distances} из {len(graph_signal_distances_cm_calculated)}")
+
+                    except Exception as e_interp_graph:
+                        logger.warning(f"[Step {current_step_num}] Ошибка интерполяции расстояний для полного графика: {e_interp_graph}. Расстояния будут NaN.")
+                else:
+                    logger.warning(f"[Step {current_step_num}] Недостаточно данных о расстоянии для интерполяции на полный график ({len(sorted_dist_ts)} точек). graph_signal_distances_cm_calculated будет содержать NaN.")
+
+                final_graph_amplitudes = normalized_envelope[::DOWNSAMPLE_FACTOR].tolist()
+                final_graph_distances_cm = graph_signal_distances_cm_calculated[::DOWNSAMPLE_FACTOR].tolist()
+                logger.info(f"[Step {current_step_num}] Данные для полного графика прорежены: amplitudes length={len(final_graph_amplitudes)}, distances length={len(final_graph_distances_cm)}")
+            else:
+                logger.warning(f"[Step {current_step_num}] Не удалось подготовить данные для полного графика: audio_time_axis_sec или normalized_envelope некорректны или пусты.")
+
+            return {
+                'minima_points': minima_list,
+                'signal_distances_cm': final_graph_distances_cm, # Данные для всего графика (прореженные)
+                'signal_amplitudes': final_graph_amplitudes    # Данные для всего графика (прореженные)
+            }
         
         except ImportError:
             logger.error("Не удалось импортировать scipy.interpolate.interp1d. Убедитесь, что SciPy установлен.")
-            return [] # Возвращаем пустой список в случае ошибки импорта
+            return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] } # Возвращаем пустой список в случае ошибки импорта
         except Exception as e:
             logger.error(f"[Step {current_step_num}] Критическая ошибка в find_minima: {type(e).__name__} - {str(e)}", exc_info=True)
+            # ИЗМЕНЕНИЕ: _find_minima_by_signal также должен возвращать аналогичный словарь
             return self._find_minima_by_signal(audio_samples, sample_rate, distances_cm, distance_timestamps, current_step_num)
 
 
@@ -1153,9 +1231,14 @@ class AudioConsumer(AsyncWebsocketConsumer):
         """Резервный метод: поиск минимумов только по аудиосигналу."""
         try:
             logger.warning(f"[Step {current_step_num}] Запуск резервного метода _find_minima_by_signal.")
+            # --- НОВЫЙ БЛОК ДЛЯ ПОДГОТОВКИ ДАННЫХ ВСЕГО СИГНАЛА (РЕЗЕРВНЫЙ) ---
+            final_graph_distances_cm_fallback = []
+            final_graph_amplitudes_fallback = []
+            DOWNSAMPLE_FACTOR_FALLBACK = 10
+
             if audio_samples is None or len(audio_samples) < 100:
                  logger.warning(f"[Step {current_step_num}, Fallback] Слишком короткий аудиосигнал.")
-                 return []
+                 return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] }
 
             audio_mono = audio_samples
             if audio_samples.ndim > 1:
@@ -1167,10 +1250,21 @@ class AudioConsumer(AsyncWebsocketConsumer):
             max_amp_env = np.max(amplitude_envelope)
             if max_amp_env == 0: 
                 logger.warning(f"[Step {current_step_num}, Fallback] Макс. амплитуда огибающей 0.")
-                return []
-            normalized_envelope = amplitude_envelope / max_amp_env
+                return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] }
             
-            inverted_envelope = 1.0 - normalized_envelope
+            normalized_envelope_fallback = amplitude_envelope / max_amp_env
+            # Клиппинг также для резервного метода
+            normalized_envelope_fallback = np.clip(normalized_envelope_fallback, 0, 1.0) 
+
+            final_graph_amplitudes_fallback = normalized_envelope_fallback[::DOWNSAMPLE_FACTOR_FALLBACK].tolist()
+            # В резервном методе у нас нет надежных данных о расстоянии для каждого сэмпла аудио.
+            # Можно либо отправить пустые расстояния, либо массив NaN такой же длины.
+            # Либо попытаться грубо интерполировать, если distances_cm и distance_timestamps хоть какие-то есть.
+            # Пока отправим NaN, чтобы на клиенте можно было решить, как это отображать (например, по оси времени).
+            final_graph_distances_cm_fallback = [np.nan] * len(final_graph_amplitudes_fallback)
+
+
+            inverted_envelope = 1.0 - normalized_envelope_fallback # Используем уже проклиппированную
             
             min_dist_audio_samples = int(sample_rate * self.minima_params.get('min_time_separation_s', 0.015))
 
@@ -1186,7 +1280,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
             minima_list = []
             for p_idx in peak_indices:
                 time_at_minima_sec = p_idx / sample_rate
-                amp_at_minima = normalized_envelope[p_idx]
+                amp_at_minima = normalized_envelope_fallback[p_idx]
                 
                 distance_cm_val = None
                 if distances_cm and distance_timestamps and len(distances_cm) == len(distance_timestamps) and len(distances_cm) > 0:
@@ -1209,11 +1303,15 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             minima_list.sort(key=lambda x: x['time_sec'])
             logger.info(f"[Step {current_step_num}, Fallback] Найдено {len(minima_list)} минимумов по аудиосигналу.")
-            return minima_list
+            return { 
+                'minima_points': minima_list, 
+                'signal_distances_cm': final_graph_distances_cm_fallback, # ИЗМЕНЕНО
+                'signal_amplitudes': final_graph_amplitudes_fallback    # ИЗМЕНЕНО
+            }
         
         except Exception as e:
             logger.error(f"[Step {current_step_num}, Fallback] Ошибка в _find_minima_by_signal: {type(e).__name__} - {str(e)}", exc_info=True)
-            return []
+            return { 'minima_points': [], 'signal_distances_cm': [], 'signal_amplitudes': [] }
 
 
     def _plot_amplitude_vs_distance(self, amplitudes_at_dist_times, distances_cm_for_plot, found_minima_list, current_step_num):
