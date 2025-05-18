@@ -222,20 +222,49 @@
           const jsonData = JSON.parse(line);
           
           if (jsonData && jsonData.type === 'distance' && jsonData.value !== undefined) {
-            const distanceValue = parseFloat(jsonData.value);
+            let distanceValue = parseFloat(jsonData.value); // Сырое значение от датчика (предположительно в мм)
+            const originalSensorValue = jsonData.value; // Сохраним оригинальное значение для логов и проверки на ошибку датчика
             
             if (!isNaN(distanceValue)) {
-              // Фильтруем значения -1 (ошибка датчика)
-              if (distanceValue < 0) { 
-                console.log('[EQM processDistanceData] Получено значение расстояния < 0 (вероятно, ошибка датчика), игнорируется:', distanceValue);
-                // Можно передать специальное значение или ничего не делать
+              // Применяем калибровку
+              let calibrationOffset = 0;
+              if (window.app && window.app.config && typeof window.app.config.ARDUINO_TUBE_POSITION_CALIBRATION_MM !== 'undefined') {
+                calibrationOffset = window.app.config.ARDUINO_TUBE_POSITION_CALIBRATION_MM;
+                console.log(`[calibrate] Настроена калибровка расстояния, вычитаю ${calibrationOffset} мм`);
+                distanceValue -= calibrationOffset;
+              } else {
+                // Это предупреждение не должно появляться, если assistant_control.js загружен и выполнен правильно
+                console.warn('[EQM processDistanceData] Калибровочная константа ARDUINO_TUBE_POSITION_CALIBRATION_MM не найдена в window.app.config. Калибровка не применена.');
+              }
+
+              // Сначала проверяем на ошибку датчика (-1) по ОРИГИНАЛЬНОМУ значению
+              if (parseFloat(originalSensorValue) < 0) { 
+                console.log('[EQM processDistanceData] Получено значение ошибки датчика (из jsonData.value), игнорируется. Оригинальное значение:', originalSensorValue);
                 this.core.processEquipmentData({
-                  distance: null, // или специальный флаг ошибки
+                  distance: null, 
                   time: (jsonData.timestamp || Date.now()) / 1000,
+                  original_value: originalSensorValue, // для отладки можно передать и оригинал
+                  calibration_offset: calibrationOffset, // и смещение
                   error: true
                 });
-                return; // Не записываем ошибочные данные
+                return; // Не обрабатываем дальше, если это была ошибка датчика
               }
+              
+              // Если после калибровки значение стало отрицательным (но не было ошибкой датчика), можно его обнулить или оставить как есть.
+              // Для консистентности, если реальное положение не может быть отрицательным, лучше обнулить.
+              // if (distanceValue < 0) {
+              //   console.log(`[EQM processDistanceData] Расстояние стало отрицательным (${distanceValue} мм) после калибровки (смещение: ${calibrationOffset} мм). Исходное: ${originalSensorValue} мм. Устанавливаем в 0.`);
+              //   distanceValue = 0;
+              // }
+
+              // Отправляем откалиброванное значение (или null если была ошибка датчика)
+              this.core.processEquipmentData({
+                distance: distanceValue, // Откалиброванное значение
+                time: (jsonData.timestamp || Date.now()) / 1000, 
+                original_value: originalSensorValue, // для отладки
+                calibration_offset: calibrationOffset, // для отладки
+                error: false // Если дошли сюда, значит не ошибка датчика
+              });
 
               if (this.isRecording) {
                 const arduinoTimeSec = jsonData.timestamp / 1000; // Предполагаем, что jsonData.timestamp это миллисекунды от Arduino

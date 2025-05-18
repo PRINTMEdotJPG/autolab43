@@ -20,15 +20,15 @@ class ResultsInline(admin.StackedInline):
     model = Results
     extra = 0
     fields = (
-        'gamma_calculated', 
-        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent_gamma',
-        'error_percent_speed',
         'status',
         'detailed_results'
     )
-    readonly_fields = fields
+    readonly_fields = (
+        'gamma_reference', 
+        'status',
+        'detailed_results'
+    )
 
 class CalculationsInline(admin.TabularInline):
     model = Calculations
@@ -110,14 +110,27 @@ class ExperimentsAdmin(admin.ModelAdmin):
         'created_at',
         'completed_at',
         'temperature',
-        'system_speed_of_sound',
-        'error_percent_speed',
-        'system_gamma',
-        'error_percent_gamma'
+        'student_speed_stage1', 'student_gamma_stage1',
+        'student_speed_stage2', 'student_gamma_stage2',
+        'student_speed_stage3', 'student_gamma_stage3',
+        'system_speed_stage1', 'system_gamma_stage1',
+        'system_speed_stage2', 'system_gamma_stage2',
+        'system_speed_stage3', 'system_gamma_stage3',
+        'error_percent_speed_stage1', 'error_percent_gamma_stage1',
+        'error_percent_speed_stage2', 'error_percent_gamma_stage2',
+        'error_percent_speed_stage3', 'error_percent_gamma_stage3',
+        'student_final_gamma', 
+        'system_final_gamma', 
+        'error_percent_final_gamma',
     )
     list_filter = ('status', 'user', 'assistant', 'created_at')
     search_fields = ('id', 'user__full_name', 'user__email', 'assistant__full_name')
-    readonly_fields = ('created_at', 'completed_at')
+    readonly_fields = (
+        'created_at', 
+        'completed_at',
+        'system_final_gamma', 
+        'error_percent_final_gamma',
+    )
     fieldsets = (
         (None, {
             'fields': ('user', 'assistant', 'status', 'step')
@@ -125,11 +138,29 @@ class ExperimentsAdmin(admin.ModelAdmin):
         ('Параметры эксперимента', {
             'fields': ('temperature', 'tube_length', 'stages')
         }),
-        ('Результаты студента', {
-            'fields': ('student_speed', 'student_gamma')
+        ('Результаты студента (поэтапно)', {
+            'fields': (
+                'student_speed_stage1', 'student_gamma_stage1',
+                'student_speed_stage2', 'student_gamma_stage2',
+                'student_speed_stage3', 'student_gamma_stage3',
+            )
         }),
-        ('Расчетные системные значения и ошибки', {
-            'fields': ('system_speed_of_sound', 'system_gamma', 'error_percent_speed', 'error_percent_gamma')
+        ('Расчетные системные значения и ошибки (поэтапно)', {
+            'fields': (
+                'system_speed_stage1', 'system_gamma_stage1',
+                'system_speed_stage2', 'system_gamma_stage2',
+                'system_speed_stage3', 'system_gamma_stage3',
+                'error_percent_speed_stage1', 'error_percent_gamma_stage1',
+                'error_percent_speed_stage2', 'error_percent_gamma_stage2',
+                'error_percent_speed_stage3', 'error_percent_gamma_stage3',
+            )
+        }),
+        ('Финальные результаты Гамма', {
+            'fields': (
+                'student_final_gamma', 
+                'system_final_gamma', 
+                'error_percent_final_gamma',
+            )
         }),
         ('Даты', {
             'fields': ('created_at', 'completed_at')
@@ -148,26 +179,16 @@ class EquipmentDataAdmin(admin.ModelAdmin):
 class ResultsAdmin(admin.ModelAdmin):
     list_display = (
         'experiment', 
-        'student_speed',
-        'student_gamma',
-        'gamma_calculated', 
-        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent_gamma',
-        'error_percent_speed',
         'status'
     )
     list_filter = ('status',)
     search_fields = ('experiment__id',)
     readonly_fields = (
         'experiment', 
-        'student_speed',
-        'student_gamma',
-        'gamma_calculated', 
-        'speed_of_sound_calculated',
         'gamma_reference', 
-        'error_percent_gamma',
-        'error_percent_speed'
+        'status',
+        'detailed_results' 
     )
 
 @admin.register(Calculations)

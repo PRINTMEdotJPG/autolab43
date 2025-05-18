@@ -472,160 +472,187 @@ def submit_results(request):
 @login_required
 @require_http_methods(["POST"])
 def save_experiment_results(request, experiment_id):
-    """Сохранение результатов, введенных студентом."""
+    """Сохранение результатов, введенных студентом (поэтапно)."""
     try:
         experiment = get_object_or_404(Experiments, id=experiment_id, user=request.user)
-        results_entry, created = Results.objects.get_or_create(experiment=experiment)
+        # results_entry, created = Results.objects.get_or_create(experiment=experiment) # Results будет обновлен позже
 
         data = json.loads(request.body)
-        
-        student_speed_str = data.get('student_speed')
-        student_gamma_str = data.get('student_gamma')
+        logger.info(f"Experiment {experiment_id}: Сохранение результатов студента. Полученные данные: {data}")
 
-        if student_speed_str is None or student_gamma_str is None:
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Отсутствуют обязательные поля: student_speed и student_gamma'
-            }, status=400)
-        
-        try:
-            student_speed = float(student_speed_str)
-            student_gamma = float(student_gamma_str)
-        except ValueError:
-            return JsonResponse({
-                'status': 'error',
-                'message': 'Скорость и гамма должны быть числами.'
-            }, status=400)
+        # Ожидаем данные для каждого этапа
+        # student_values_stages = data.get('stages') # Предположим, что данные приходят как список словарей
+        # Пример: data = {
+        # 'student_speed_stage1': 340, 'student_gamma_stage1': 1.4,
+        # 'student_speed_stage2': 342, 'student_gamma_stage2': 1.41,
+        # 'student_speed_stage3': 339, 'student_gamma_stage3': 1.39
+        # }
 
-        results_entry.student_speed = student_speed
-        results_entry.student_gamma = student_gamma
+        all_stages_successful = True
+        per_stage_student_data = []
 
-        current_system_gamma = results_entry.gamma_calculated
-        current_system_speed = results_entry.speed_of_sound_calculated # Новое
+        for i in range(1, 4): # Для трех этапов
+            student_speed_str = data.get(f'student_speed_stage{i}')
+            student_gamma_str = data.get(f'student_gamma_stage{i}')
 
-        error_percent_gamma = None
-        error_percent_speed = None # Новое
+            if student_speed_str is None or student_gamma_str is None:
+                logger.error(f"Experiment {experiment_id}, этап {i}: отсутствуют поля student_speed_stage{i} или student_gamma_stage{i}")
+                return JsonResponse({
+                    'status': 'error',
+                    'message': f'Отсутствуют обязательные поля для этапа {i}: скорость и гамма'
+                }, status=400)
+            
+            try:
+                student_speed = float(student_speed_str)
+                student_gamma = float(student_gamma_str)
+            except ValueError:
+                logger.error(f"Experiment {experiment_id}, этап {i}: скорость или гамма не являются числами.")
+                return JsonResponse({
+                    'status': 'error',
+                    'message': f'Скорость и гамма для этапа {i} должны быть числами.'
+                }, status=400)
 
-        if current_system_gamma is not None and current_system_gamma != 0:
-            calculated_error_gamma = abs((student_gamma - current_system_gamma) / current_system_gamma) * 100
-            error_percent_gamma = round(calculated_error_gamma, 2)
-        else:
-            logger.warning(f"System gamma (results_entry.gamma_calculated) for experiment {experiment_id} is {current_system_gamma}. Cannot calculate gamma error percentage.")
+            # Сохраняем студенческие значения в модель Experiments
+            setattr(experiment, f'student_speed_stage{i}', student_speed)
+            setattr(experiment, f'student_gamma_stage{i}', student_gamma)
+            
+            per_stage_student_data.append({
+                'stage': i,
+                'speed': student_speed,
+                'gamma': student_gamma
+            })
 
-        if current_system_speed is not None and current_system_speed != 0: # Новое условие для скорости
-            calculated_error_speed = abs((student_speed - current_system_speed) / current_system_speed) * 100
-            error_percent_speed = round(calculated_error_speed, 2)
-        else:
-            logger.warning(f"System speed (results_entry.speed_of_sound_calculated) for experiment {experiment_id} is {current_system_speed}. Cannot calculate speed error percentage.")
+            # Получаем системные значения для этого этапа
+            system_speed = getattr(experiment, f'system_speed_stage{i}', None)
+            system_gamma = getattr(experiment, f'system_gamma_stage{i}', None)
 
-        results_entry.error_percent_gamma = error_percent_gamma # Обновлено имя поля
-        results_entry.error_percent_speed = error_percent_speed # Новое поле
+            error_percent_s = None
+            error_percent_g = None
+            stage_successful = True # Флаг успеха для текущего этапа
 
-        ACCEPTABLE_ERROR_PERCENT = 5.0
-        
-        # Новая логика определения статуса
-        if error_percent_gamma is not None and error_percent_speed is not None:
-            if error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT and error_percent_speed <= ACCEPTABLE_ERROR_PERCENT:
-                results_entry.status = 'success'
+            if system_speed is not None and system_speed != 0:
+                error_percent_s = round(abs((student_speed - system_speed) / system_speed) * 100, 2)
+                setattr(experiment, f'error_percent_speed_stage{i}', error_percent_s)
+                if error_percent_s > config.ACCEPTABLE_ERROR_PERCENT:
+                    stage_successful = False
             else:
-                results_entry.status = 'fail'
-        elif error_percent_gamma is not None: # Если посчитана только ошибка гаммы
-             if error_percent_gamma <= ACCEPTABLE_ERROR_PERCENT:
-                 # Не можем считать успехом, если скорость не проверена
-                 # Если current_system_speed is None, это проблема данных, а не студента
-                 # Можно установить специфический статус или оставить fail/pending
-                 results_entry.status = 'fail' # или другой статус, например, 'error_system_data_missing_speed'
-                 logger.warning(f"Experiment {experiment_id}: Gamma error is acceptable, but speed error could not be calculated. Status set to fail.")
-             else:
-                 results_entry.status = 'fail'
-        elif error_percent_speed is not None: # Если посчитана только ошибка скорости
-             if error_percent_speed <= ACCEPTABLE_ERROR_PERCENT:
-                 results_entry.status = 'fail' # Аналогично, не можем считать успехом без гаммы
-                 logger.warning(f"Experiment {experiment_id}: Speed error is acceptable, but gamma error could not be calculated. Status set to fail.")
-             else:
-                 results_entry.status = 'fail'
+                logger.warning(f"Experiment {experiment.id}, этап {i}: системная скорость = {system_speed}. Невозможно рассчитать ошибку скорости.")
+                setattr(experiment, f'error_percent_speed_stage{i}', None)
+                stage_successful = False 
+
+            if system_gamma is not None and system_gamma != 0:
+                error_percent_g = round(abs((student_gamma - system_gamma) / system_gamma) * 100, 2)
+                setattr(experiment, f'error_percent_gamma_stage{i}', error_percent_g)
+                if error_percent_g > config.ACCEPTABLE_ERROR_PERCENT:
+                    stage_successful = False
+            else:
+                logger.warning(f"Experiment {experiment.id}, этап {i}: системная гамма = {system_gamma}. Невозможно рассчитать ошибку гаммы.")
+                setattr(experiment, f'error_percent_gamma_stage{i}', None)
+                stage_successful = False
+            
+            if not stage_successful:
+                all_stages_successful = False
+        
+        # Обработка student_final_gamma
+        student_final_gamma_str = data.get('student_final_gamma')
+        if student_final_gamma_str is None:
+            logger.error(f"Experiment {experiment_id}: отсутствует поле student_final_gamma")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Отсутствует обязательное поле: Финальная гамма (средняя по этапам)'
+            }, status=400)
+        try:
+            student_final_gamma = float(student_final_gamma_str)
+            experiment.student_final_gamma = student_final_gamma
+        except ValueError:
+            logger.error(f"Experiment {experiment_id}: финальная гамма не является числом.")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Финальная гамма должна быть числом.'
+            }, status=400)
+
+        # Расчет system_final_gamma
+        system_gammas_for_avg = []
+        if experiment.system_gamma_stage1 is not None: system_gammas_for_avg.append(experiment.system_gamma_stage1)
+        if experiment.system_gamma_stage2 is not None: system_gammas_for_avg.append(experiment.system_gamma_stage2)
+        if experiment.system_gamma_stage3 is not None: system_gammas_for_avg.append(experiment.system_gamma_stage3)
+        
+        system_final_gamma = None
+        if system_gammas_for_avg:
+            system_final_gamma = round(sum(system_gammas_for_avg) / len(system_gammas_for_avg), 3)
+            experiment.system_final_gamma = system_final_gamma
         else:
-            # Ошибки не рассчитаны (например, current_system_gamma и current_system_speed были 0 или None)
-            # Статус не должен автоматически становиться 'success'.
-            results_entry.status = 'fail' # Или 'error_system_data_missing'
-            logger.warning(f"Experiment {experiment_id}: Neither gamma nor speed error could be calculated. Status set to fail.")
+            logger.warning(f"Experiment {experiment.id}: нет системных поэтапных гамм для расчета system_final_gamma.")
+            experiment.system_final_gamma = None
 
+        # Расчет error_percent_final_gamma
+        error_percent_final_gamma = None
+        final_gamma_successful = True # Флаг успеха для финальной гаммы
+        if system_final_gamma is not None and system_final_gamma != 0:
+            error_percent_final_gamma = round(abs((student_final_gamma - system_final_gamma) / system_final_gamma) * 100, 2)
+            experiment.error_percent_final_gamma = error_percent_final_gamma
+            if error_percent_final_gamma > config.ACCEPTABLE_ERROR_PERCENT:
+                final_gamma_successful = False
+        else:
+            logger.warning(f"Experiment {experiment.id}: системная финальная гамма = {system_final_gamma}. Невозможно рассчитать ошибку финальной гаммы.")
+            experiment.error_percent_final_gamma = None
+            final_gamma_successful = False # Считаем неуспешным, если нет системных данных для сравнения
 
+        experiment.save() # Сохраняем все обновленные поля эксперимента
+
+        # Обновляем статус в Results и Experiments
+        results_entry, created = Results.objects.get_or_create(experiment=experiment)
+        # Итоговый успех, если ВСЕ этапы успешны И финальная гамма успешна
+        final_overall_status_value = 'success' if all_stages_successful and final_gamma_successful else 'fail'
+        
+        results_entry.status = final_overall_status_value
+        # Очистим старые поля усредненных значений в Results
+        results_entry.student_speed = None 
+        results_entry.student_gamma = None
+        results_entry.gamma_calculated = None 
+        results_entry.speed_of_sound_calculated = None 
+        results_entry.error_percent_gamma = None 
+        results_entry.error_percent_speed = None 
         results_entry.save()
 
-        logger.info(f"Data saved for Results ID {results_entry.pk}: "
-                    f"Student Speed: {results_entry.student_speed}, "
-                    f"Student Gamma: {results_entry.student_gamma}, "
-                    f"System Gamma: {results_entry.gamma_calculated}, "
-                    f"System Speed: {results_entry.speed_of_sound_calculated}, " # Новое
-                    f"Error Gamma: {results_entry.error_percent_gamma}%, " # Обновлено
-                    f"Error Speed: {results_entry.error_percent_speed}%, " # Новое
-                    f"Status: {results_entry.status}")
+        experiment.status = 'completed' if final_overall_status_value == 'success' else 'failed'
+        experiment.save()
 
-        if experiment:
-            experiment.student_speed = results_entry.student_speed
-            experiment.student_gamma = results_entry.student_gamma
-            experiment.system_gamma = results_entry.gamma_calculated
-            experiment.system_speed_of_sound = results_entry.speed_of_sound_calculated # Новое
-            experiment.error_percent_gamma = results_entry.error_percent_gamma # Обновлено
-            experiment.error_percent_speed = results_entry.error_percent_speed # Новое
-            
-            if results_entry.status == 'success':
-                experiment.status = 'completed'
-                logger.info(f"Experiment ID {experiment.id} status changed to 'completed' due to successful student results.")
-            elif results_entry.status == 'fail':
-                experiment.status = 'failed' # Устанавливаем новый статус 'failed' для эксперимента
-                logger.info(f"Experiment ID {experiment.id} status changed to 'failed' due to student results being 'fail'.")
-            
-            experiment.save()
-            logger.info(f"Data copied and saved to Experiment ID {experiment.id}: "
-                        f"Student Speed: {experiment.student_speed}, "
-                        f"Student Gamma: {experiment.student_gamma}, "
-                        f"System Gamma: {experiment.system_gamma}, "
-                        f"System Speed: {experiment.system_speed_of_sound}, " # Новое
-                        f"Error Gamma: {experiment.error_percent_gamma}%, " # Обновлено
-                        f"Error Speed: {experiment.error_percent_speed}%, " # Новое
-                        f"Experiment Status: {experiment.status}")
+        logger.info(f"Результаты для эксперимента {experiment_id} сохранены. Итоговый статус: {final_overall_status_value}. Поэтапные: {per_stage_student_data}. Финальная гамма студ: {student_final_gamma}, сист: {system_final_gamma}, ошибка: {error_percent_final_gamma}")
 
+        # Формируем ответ для клиента
         response_payload = {
-            'status': 'success', # Статус HTTP запроса, не статус проверки
+            'status': 'success', # Статус HTTP запроса
             'message': 'Результаты успешно сохранены!',
-            'results_status': results_entry.status, # Статус проверки (success/fail)
-            'error_percent_gamma': results_entry.error_percent_gamma,
-            'error_percent_speed': results_entry.error_percent_speed, # Новое
-            'student_values': {
-                'gamma': results_entry.student_gamma,
-                'speed': results_entry.student_speed
-            },
-            'system_values': {
-                'gamma': results_entry.gamma_calculated,
-                'speed': results_entry.speed_of_sound_calculated # Новое
+            'overall_status': final_overall_status_value, # Общий итог (success/fail)
+            'stages': [],
+            'final_gamma_results': { # Новая секция для финальной гаммы
+                'student_final_gamma': student_final_gamma,
+                'system_final_gamma': system_final_gamma,
+                'error_percent_final_gamma': error_percent_final_gamma
             }
         }
-        # Обновляем сообщение об ошибке, если есть
-        # Можно сделать более детальным, указав какая из ошибок (или обе) привели к 'fail'
-        if results_entry.status == 'fail':
-            error_messages = []
-            if results_entry.error_percent_gamma is not None:
-                error_messages.append(f"Отклонение вашего значения γ ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent_gamma}%.")
-            if results_entry.error_percent_speed is not None:
-                 error_messages.append(f"Отклонение вашей скорости звука ({results_entry.student_speed}) от системной ({results_entry.speed_of_sound_calculated}) составило {results_entry.error_percent_speed}%.")
-            if not error_messages and (results_entry.gamma_calculated is None or results_entry.speed_of_sound_calculated is None) :
-                 error_messages.append("Не удалось провести сравнение из-за отсутствия системных данных для расчета.")
-            elif not error_messages:
-                 error_messages.append("Результаты не соответствуют критериям успешного выполнения.")
-
-            response_payload['comparison_message'] = " ".join(error_messages)
+        for i in range(1, 4):
+            response_payload['stages'].append({
+                'stage_number': i,
+                'student_speed': getattr(experiment, f'student_speed_stage{i}'),
+                'student_gamma': getattr(experiment, f'student_gamma_stage{i}'),
+                'system_speed': getattr(experiment, f'system_speed_stage{i}'),
+                'system_gamma': getattr(experiment, f'system_gamma_stage{i}'),
+                'error_percent_speed': getattr(experiment, f'error_percent_speed_stage{i}'),
+                'error_percent_gamma': getattr(experiment, f'error_percent_gamma_stage{i}'),
+            })
         
         return JsonResponse(response_payload)
     
     except Experiments.DoesNotExist:
+        logger.error(f"Experiment {experiment_id} не найден при попытке сохранения результатов студента.")
         return JsonResponse({'status': 'error', 'message': 'Эксперимент не найден'}, status=404)
     except Exception as e:
         logger.error(f"Ошибка при сохранении результатов студента для эксперимента {experiment_id}: {str(e)}", exc_info=True)
         return JsonResponse({
             'status': 'error',
-            'message': str(e)
+            'message': f'Внутренняя ошибка сервера: {str(e)}'
         }, status=500)
     
 @login_required
@@ -1048,19 +1075,36 @@ def complete_experiment(request, experiment_id):
         
         experiment.save()
 
-        # <<< НАЧАЛО НОВОГО КОДА ДЛЯ РАСЧЕТА СИСТЕМНЫХ ЗНАЧЕНИЙ >>>
-        system_avg_speed, system_avg_gamma = calculate_system_results(experiment.stages, experiment.temperature)
-        logger.info(f"Experiment {experiment_id}: Calculated system_avg_speed={system_avg_speed}, system_avg_gamma={system_avg_gamma}")
-        # <<< КОНЕЦ НОВОГО КОДА >>>
+        # Расчет системных значений ПОЭТАПНО
+        # system_avg_speed, system_avg_gamma = calculate_system_results(experiment.stages, experiment.temperature) # Старый вызов
+        system_stage_results = calculate_system_results(experiment.stages, experiment.temperature) # Новый вызов, возвращает список словарей
+        logger.info(f"Experiment {experiment_id}: Calculated system_stage_results={system_stage_results}")
 
+        # Сохранение поэтапных системных результатов в модель Experiments
+        if system_stage_results and len(system_stage_results) > 0:
+            experiment.system_speed_stage1 = system_stage_results[0].get('speed') if len(system_stage_results) > 0 else None
+            experiment.system_gamma_stage1 = system_stage_results[0].get('gamma') if len(system_stage_results) > 0 else None
+        if system_stage_results and len(system_stage_results) > 1:
+            experiment.system_speed_stage2 = system_stage_results[1].get('speed') if len(system_stage_results) > 1 else None
+            experiment.system_gamma_stage2 = system_stage_results[1].get('gamma') if len(system_stage_results) > 1 else None
+        if system_stage_results and len(system_stage_results) > 2:
+            experiment.system_speed_stage3 = system_stage_results[2].get('speed') if len(system_stage_results) > 2 else None
+            experiment.system_gamma_stage3 = system_stage_results[2].get('gamma') if len(system_stage_results) > 2 else None
+        
+        experiment.save() # Сохраняем обновленный experiment с поэтапными системными данными
+
+        # Создание или обновление записи в Results
+        # Поля gamma_calculated и speed_of_sound_calculated в Results теперь могут быть не нужны
+        # или использоваться для каких-то общих/справочных значений, если это требуется.
+        # На данном этапе я их закомментирую, предполагая, что основные данные теперь в Experiments.
         Results.objects.update_or_create(
             experiment=experiment,
             defaults={
                 'visualization_data': data.get('charts_data', {}),
-                'detailed_results': data.get('steps', []),
-                'status': 'pending_student_input', # Изменено на pending_student_input
-                'gamma_calculated': system_avg_gamma, # Сохраняем рассчитанную системную гамму
-                'speed_of_sound_calculated': system_avg_speed # Сохраняем рассчитанную системную скорость
+                'detailed_results': data.get('steps', []), # Это поле кажется важным, оставляем
+                'status': 'pending_student_input', 
+                # 'gamma_calculated': system_avg_gamma, # Устарело, данные теперь в Experiments
+                # 'speed_of_sound_calculated': system_avg_speed # Устарело, данные теперь в Experiments
             }
         )
 
@@ -1099,21 +1143,40 @@ def get_experiment_details_for_student(request, experiment_id):
                     
                     logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Data for graph: {len(graph_distances_cm)} distances, {len(graph_amplitudes)} amplitudes.")
 
+                    temp_full_signal_data = [] # Временный список для накопления всех точек
                     if isinstance(graph_distances_cm, list) and isinstance(graph_amplitudes, list) and len(graph_distances_cm) == len(graph_amplitudes):
                         for i in range(len(graph_distances_cm)):
                             try:
-                                # Расстояния в 'graph_distances_cm' уже в СМ
                                 pos_m = float(graph_distances_cm[i]) / 100.0 
                                 amp = float(graph_amplitudes[i])
-                                if not (np.isnan(pos_m) or np.isnan(amp)): # Пропускаем NaN значения
-                                    full_signal_data_for_stage.append({'position': pos_m, 'amplitude': amp})
+                                if not (np.isnan(pos_m) or np.isnan(amp)):
+                                    temp_full_signal_data.append({'position': pos_m, 'amplitude': amp})
                             except (ValueError, TypeError) as e:
                                 logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Error converting graph data point: dist={graph_distances_cm[i]}, amp={graph_amplitudes[i]}. Error: {e}")
-                        logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Processed full_signal_data_for_stage (first 5): {full_signal_data_for_stage[:5]}")
+                        
+                        # Логика прореживания данных
+                        MAX_POINTS_FULL_SIGNAL = 2000
+                        TARGET_POINTS_AFTER_DECIMATION = 1000 # Целевое количество точек после прореживания
+                        
+                        if len(temp_full_signal_data) > MAX_POINTS_FULL_SIGNAL:
+                            # Рассчитываем шаг так, чтобы получить примерно TARGET_POINTS_AFTER_DECIMATION точек
+                            step = round(len(temp_full_signal_data) / TARGET_POINTS_AFTER_DECIMATION)
+                            if step <= 0: step = 1 # Шаг не может быть 0 или отрицательным
+                            
+                            full_signal_data_for_stage = temp_full_signal_data[::step]
+                            logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Full signal data decimated from {len(temp_full_signal_data)} to {len(full_signal_data_for_stage)} points (step: {step}).")
+                        else:
+                            full_signal_data_for_stage = temp_full_signal_data
+
+                        # logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Processed full_signal_data_for_stage (first 5): {full_signal_data_for_stage[:5]}") # Заменено на лог ниже
                     elif len(graph_distances_cm) != len(graph_amplitudes):
                         logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Mismatch in lengths for graph data: {len(graph_distances_cm)} distances vs {len(graph_amplitudes)} amplitudes.")
+                        full_signal_data_for_stage = [] # Инициализируем пустым списком в случае ошибки
                     else:
                         logger.warning(f"[Exp {experiment.id}, Stage {stage_index+1}] Graph data is not in list format or is missing. Distances type: {type(graph_distances_cm)}, Amplitudes type: {type(graph_amplitudes)}")
+                        full_signal_data_for_stage = [] # Инициализируем пустым списком
+                    
+                    logger.info(f"[Exp {experiment.id}, Stage {stage_index+1}] Final full_signal_data_for_stage (first 5): {full_signal_data_for_stage[:5] if full_signal_data_for_stage else 'Empty'}")
                     # <<< КОНЕЦ ИЗМЕНЕНИЙ ДЛЯ ПОЛНОГО СИГНАЛА
 
                     if isinstance(raw_minima_data, list):
@@ -1191,51 +1254,32 @@ def get_experiment_details_for_student(request, experiment_id):
         if global_temp_celsius is not None:
             global_temp_kelvin = round(global_temp_celsius + 273.15, 2)
 
-        system_results_data = None
-        student_submitted_data = None
         results_status = None
-        error_details = None
-
         if results_entry:
             results_status = results_entry.status
-            system_results_data = {
-                'gamma': results_entry.gamma_calculated, # Системная гамма
-                # Добавить system_speed_of_sound, если будет в модели Results
-                # 'speed_of_sound': results_entry.system_speed_of_sound 
-            }
-            if results_entry.student_gamma is not None or results_entry.student_speed is not None:
-                student_submitted_data = {
-                    'gamma': results_entry.student_gamma,
-                    'speed_of_sound': results_entry.student_speed
-                }
-            
-            # Если есть ошибка, и статус 'fail', формируем детали
-            if results_status == 'fail' and results_entry.error_percent_gamma is not None:
-                error_details = {
-                    'student_gamma': results_entry.student_gamma,
-                    'system_gamma': results_entry.gamma_calculated,
-                    'error_percent_gamma': results_entry.error_percent_gamma,
-                    'message': f"Отклонение значения γ студента ({results_entry.student_gamma}) от системного ({results_entry.gamma_calculated}) составило {results_entry.error_percent_gamma}%."
-                    # Можно добавить аналогично для скорости звука, если будет сравниваться
-                    # Например, добавить сюда error_percent_speed, если он есть
-                }
-                # Дополнительно добавим информацию об ошибке скорости, если она есть
-                if hasattr(results_entry, 'error_percent_speed') and results_entry.error_percent_speed is not None:
-                    error_details['error_percent_speed'] = results_entry.error_percent_speed
-                    error_details['student_speed'] = results_entry.student_speed
-                    error_details['system_speed'] = results_entry.speed_of_sound_calculated
-                    error_details['message_speed'] = f"Отклонение скорости звука студента ({results_entry.student_speed}) от системной ({results_entry.speed_of_sound_calculated}) составило {results_entry.error_percent_speed}%."
+            # Старые поля, такие как results_entry.gamma_calculated, results_entry.student_gamma и т.д. больше не используются здесь.
 
-        # --- НАЧАЛО ИЗМЕНЕНИЯ ---
-        # Принудительно отключаем отладочный режим для профиля студента
+        # Формируем поэтапные системные расчеты для отладки на странице студента
+        system_calculations_per_stage = []
+        student_submitted_values_per_stage = [] # Для возможного отображения ранее введенных студентом значений
+
+        for i in range(1, 4):
+            system_calculations_per_stage.append({
+                'stage': i,
+                'speed': getattr(experiment, f'system_speed_stage{i}', None),
+                'gamma': getattr(experiment, f'system_gamma_stage{i}', None)
+            })
+            # Также соберем данные, которые студент мог уже ввести для этого эксперимента
+            student_submitted_values_per_stage.append({
+                'stage': i,
+                'speed': getattr(experiment, f'student_speed_stage{i}', None),
+                'gamma': getattr(experiment, f'student_gamma_stage{i}', None),
+                'error_speed': getattr(experiment, f'error_percent_speed_stage{i}', None),
+                'error_gamma': getattr(experiment, f'error_percent_gamma_stage{i}', None)
+            })
+
+        # Принудительно отключаем отладочный режим для профиля студента (если это временная мера)
         DEBUG_MODE_FOR_STUDENT_PROFILE = False
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-        error_percent_gamma_val = None
-        error_percent_speed_val = None
-        if results_entry:
-            error_percent_gamma_val = results_entry.error_percent_gamma
-            error_percent_speed_val = results_entry.error_percent_speed
 
         response_data = {
             'status': 'success',
@@ -1245,17 +1289,18 @@ def get_experiment_details_for_student(request, experiment_id):
             'global_temperature_celsius': global_temp_celsius,
             'global_temperature_kelvin': global_temp_kelvin,
             'molar_mass_air_kg_mol': 0.029, # кг/моль
-            'stages': stages_data_for_student,
-            'system_calculated_results': system_results_data, # Системные расчеты
-            'student_submitted_results': student_submitted_data, # Что студент уже вводил
+            'stages': stages_data_for_student, # Данные для расчетов студента (минимумы, deltaL и т.д.)
+            
+            # Новые поля с поэтапными данными:
+            'system_results_per_stage': system_calculations_per_stage, # Системные расчеты по этапам
+            'student_submitted_values_per_stage': student_submitted_values_per_stage, # Что студент ввел по этапам (если вводил)
+            'student_final_gamma_submitted': experiment.student_final_gamma, # Ранее введенная студентом финальная гамма
+            
             'results_processing_status': results_status, # Статус из Results (pending_student_input, success, fail)
-            'error_details': error_details, # Информация об ошибке, если есть
-            'error_percent_gamma': error_percent_gamma_val,
-            'error_percent_speed': error_percent_speed_val,
-            'debug_mode_for_student_profile': DEBUG_MODE_FOR_STUDENT_PROFILE # --- ДОБАВЛЕНО ---
+            'debug_mode_for_student_profile': DEBUG_MODE_FOR_STUDENT_PROFILE
         }
 
-        logger.info(f"Student {request.user.email} accessed data for experiment {experiment_id}. Data: {response_data}")
+        logger.info(f"Student {request.user.email} accessed data for experiment {experiment_id}. Data sample (system_results_per_stage): {response_data.get('system_results_per_stage')}")
         return JsonResponse(response_data)
 
     except Http404:
@@ -1300,27 +1345,25 @@ def student_experiment_detail_view(request, experiment_id):
 # Вспомогательная функция для расчета системных значений
 def calculate_system_results(stages_data, global_temperature_celsius):
     logger.info(f"Начало calculate_system_results. Температура: {global_temperature_celsius}°C. Этапы: {len(stages_data) if stages_data else 0}")
-    all_calculated_speeds = []
-    all_calculated_gammas = []
+    # all_calculated_speeds = [] # Больше не нужны для усреднения здесь
+    # all_calculated_gammas = [] # Больше не нужны для усреднения здесь
+    per_stage_results = [] # Список для хранения результатов каждого этапа
 
     if not isinstance(stages_data, list):
         logger.error(f"Ошибка: stages_data не является списком: {stages_data}")
-        return None, None
+        # return None, None # Старый возврат
+        return [] # Возвращаем пустой список в случае ошибки
 
     for i, stage in enumerate(stages_data):
+        stage_result = {'speed': None, 'gamma': None} # Результат для текущего этапа
         if not isinstance(stage, dict):
             logger.warning(f"Этап {i+1} не является словарем, пропускается: {stage}")
+            per_stage_results.append(stage_result) # Добавляем пустой результат
             continue
 
         frequency = stage.get('frequency')
-        # Данные о минимумах теперь ожидаются в experiment.stages[i].get('minima') 
-        # или в data.get('steps')[i].get('labels') -> это minima
-        # Структура данных в 'data' и 'labels' из complete_experiment:
-        # 'data': step_data['data'] -> это сырые данные {time_ms, microphone_signal, tube_position, voltage}
-        # 'labels': step_data['labels'] -> это обработанные минимумы [{value, distance_m, time_sec, ...}]
-        minima_data = stage.get('labels') # Предполагаем, что 'labels' содержит данные о минимумах
+        minima_data = stage.get('labels') 
         
-        # Также может быть, что минимумы хранятся в stage.get('minima'), если они там были ранее
         if not minima_data and 'minima' in stage:
              minima_data = stage.get('minima')
              logger.info(f"Этап {i+1}: минимумы взяты из stage.minima")
@@ -1328,10 +1371,12 @@ def calculate_system_results(stages_data, global_temperature_celsius):
              logger.info(f"Этап {i+1}: минимумы взяты из stage.labels")
         else:
             logger.warning(f"Этап {i+1}: данные о минимумах (ни labels, ни minima) не найдены. Частота: {frequency}. Данные этапа: {stage}")
+            per_stage_results.append(stage_result)
             continue
 
         if not frequency or not isinstance(minima_data, list) or len(minima_data) < 2:
             logger.warning(f"Этап {i+1}: недостаточно данных (частота: {frequency}, минимумы: {len(minima_data) if minima_data else 0}). Пропускается.")
+            per_stage_results.append(stage_result)
             continue
         
         valid_minima_distances = []
@@ -1343,17 +1388,17 @@ def calculate_system_results(stages_data, global_temperature_celsius):
         
         if len(valid_minima_distances) < 2:
             logger.warning(f"Этап {i+1}: недостаточно валидных минимумов с 'distance_m' ({len(valid_minima_distances)}). Расчет для этапа невозможен.")
+            per_stage_results.append(stage_result)
             continue
         
-        # Сортировка положений минимумов
         valid_minima_distances.sort()
 
         delta_l_values = [valid_minima_distances[k+1] - valid_minima_distances[k] for k in range(len(valid_minima_distances)-1)]
-        # Убираем нулевые или отрицательные delta_l, если такие есть после сортировки (хотя не должно быть при корректных данных)
         delta_l_values = [d for d in delta_l_values if d > 1e-9] 
 
         if not delta_l_values:
             logger.warning(f"Этап {i+1}: не удалось рассчитать валидные delta_L. Пропускается.")
+            per_stage_results.append(stage_result)
             continue
 
         avg_delta_l = sum(delta_l_values) / len(delta_l_values)
@@ -1363,15 +1408,19 @@ def calculate_system_results(stages_data, global_temperature_celsius):
         logger.info(f"Этап {i+1}: Расчет. Частота={frequency} Hz, AvgDeltaL={avg_delta_l:.4f} м, Скорость={stage_speed:.2f} м/с, Гамма={stage_gamma:.4f if stage_gamma is not None else 'N/A'}")
 
         if stage_speed is not None and stage_speed > 0:
-            all_calculated_speeds.append(stage_speed)
+            stage_result['speed'] = stage_speed
         if stage_gamma is not None:
-            all_calculated_gammas.append(stage_gamma)
+            stage_result['gamma'] = stage_gamma
+        
+        per_stage_results.append(stage_result)
 
-    final_avg_speed = (sum(all_calculated_speeds) / len(all_calculated_speeds)) if all_calculated_speeds else None
-    final_avg_gamma = (sum(all_calculated_gammas) / len(all_calculated_gammas)) if all_calculated_gammas else None
+    # final_avg_speed = (sum(all_calculated_speeds) / len(all_calculated_speeds)) if all_calculated_speeds else None
+    # final_avg_gamma = (sum(all_calculated_gammas) / len(all_calculated_gammas)) if all_calculated_gammas else None
     
-    logger.info(f"Итоговые системные расчеты: Средняя скорость={final_avg_speed}, Средняя гамма={final_avg_gamma}")
-    return final_avg_speed, final_avg_gamma
+    # logger.info(f"Итоговые системные расчеты: Средняя скорость={final_avg_speed}, Средняя гамма={final_avg_gamma}")
+    # return final_avg_speed, final_avg_gamma # Старый возврат
+    logger.info(f"Итоговые поэтапные системные расчеты: {per_stage_results}")
+    return per_stage_results # Возвращаем список результатов по этапам
 
 def calculate_gamma_value(v_sound, temperature_celsius):
     """Расчет коэффициента γ по скорости звука и температуре."""

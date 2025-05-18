@@ -500,6 +500,20 @@ class AudioConsumer(AsyncWebsocketConsumer):
                             stage_data['system_speed'] = float(system_speed) if system_speed is not None and not np.isnan(system_speed) else None
                             stage_data['system_gamma'] = float(system_gamma) if system_gamma is not None and not np.isnan(system_gamma) else None
                             
+                            # <<<< НАЧАЛО ИЗМЕНЕНИЙ >>>>
+                            # Сохранение поэтапных системных значений в объект Experiment
+                            if step_num == 1:
+                                self.experiment.system_speed_stage1 = stage_data['system_speed']
+                                self.experiment.system_gamma_stage1 = stage_data['system_gamma']
+                            elif step_num == 2:
+                                self.experiment.system_speed_stage2 = stage_data['system_speed']
+                                self.experiment.system_gamma_stage2 = stage_data['system_gamma']
+                            elif step_num == 3:
+                                self.experiment.system_speed_stage3 = stage_data['system_speed']
+                                self.experiment.system_gamma_stage3 = stage_data['system_gamma']
+                            # Добавьте elif для других этапов, если необходимо
+                            # <<<< КОНЕЦ ИЗМЕНЕНИЙ >>>>
+
                             if stage_data['system_gamma'] is not None: # Проверяем, что gamma рассчиталась (не NaN/None)
                                 all_valid_gammas.append(stage_data['system_gamma'])
                                 if stage_data['system_speed'] is not None: # system_speed тоже должен быть валидным
@@ -530,6 +544,13 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             final_avg_gamma_float = float(final_avg_gamma) if final_avg_gamma is not None and not np.isnan(final_avg_gamma) else None
             final_avg_speed_float = float(final_avg_speed) if final_avg_speed is not None and not np.isnan(final_avg_speed) else None
+
+            # <<<< НАЧАЛО ИЗМЕНЕНИЙ >>>>
+            # Сохранение финальной системной гаммы в объект Experiment
+            self.experiment.system_final_gamma = final_avg_gamma_float
+            # Если вы добавили поле system_final_speed в модель Experiments, раскомментируйте следующую строку:
+            # self.experiment.system_final_speed = final_avg_speed_float 
+            # <<<< КОНЕЦ ИЗМЕНЕНИЙ >>>>
 
             # ИЗМЕНЕНО: Логика установки финального статуса эксперимента
             if all_valid_gammas: # Если есть хотя бы одно рассчитанное значение gamma

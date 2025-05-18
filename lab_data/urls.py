@@ -23,7 +23,7 @@ urlpatterns = [
     path('api/student-experiments/', views.get_student_experiments, name='student_experiments'),
     path('api/experiment/<int:experiment_id>/save-params/', views.save_experiment_params, name='save_experiment_params'),
     path('api/experiment/<int:experiment_id>/complete/', views.complete_experiment, name='complete_experiment'),
-    path('test-save-results/<int:experiment_id>/', views.save_experiment_results, name='test_save_results'),
+    path('api/experiment/<int:experiment_id>/save-results/', views.save_experiment_results, name='save_experiment_results'),
     path('api/experiment/<int:experiment_id>/student-data/', views.get_experiment_details_for_student, name='get_experiment_details_for_student'),
     path('api/experiment/<int:experiment_id>/upload-data/', views.upload_experiment_data, name='upload_experiment_data_api'),
 ]

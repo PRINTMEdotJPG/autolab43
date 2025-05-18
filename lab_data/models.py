@@ -262,18 +262,47 @@ class Experiments(models.Model):
 
     stages = models.JSONField(
         default=list,
-        help_text="Данные этапов: ["
-                 "{'frequency': 1500, 'data': [...]}, "
-                 "{'frequency': 3000, 'data': [...]}, ...]")
+        help_text="""Данные этапов: [\"
+                 "{'frequency': 1500, 'data': [...]}, \"
+                 "{'frequency': 3000, 'data': [...]}, ...]""")
 
-    student_speed = models.FloatField(null=True)  # Добавить
-    student_gamma = models.FloatField(null=True)  # Добавить
+    # student_speed = models.FloatField(null=True)  # Добавить - УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
+    # student_gamma = models.FloatField(null=True)  # Добавить - УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
     
     
-    system_gamma = models.FloatField(null=True)
-    system_speed_of_sound = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # Новое поле
-    error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True) # Переименовано и уточнено
-    error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True) # Новое поле
+    # system_gamma = models.FloatField(null=True) # УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
+    # system_speed_of_sound = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
+    # error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True) # УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
+    # error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True) # УСТАРЕЛО, ЗАМЕНЕНО НА ПОЭТАПНЫЕ
+
+    # Поля для хранения системных значений для каждого этапа
+    system_speed_stage1 = models.FloatField(verbose_name="Скорость звука (система, этап 1, м/с)", null=True, blank=True)
+    system_gamma_stage1 = models.FloatField(verbose_name="Гамма (система, этап 1)", null=True, blank=True)
+    system_speed_stage2 = models.FloatField(verbose_name="Скорость звука (система, этап 2, м/с)", null=True, blank=True)
+    system_gamma_stage2 = models.FloatField(verbose_name="Гамма (система, этап 2)", null=True, blank=True)
+    system_speed_stage3 = models.FloatField(verbose_name="Скорость звука (система, этап 3, м/с)", null=True, blank=True)
+    system_gamma_stage3 = models.FloatField(verbose_name="Гамма (система, этап 3)", null=True, blank=True)
+
+    # Поля для хранения студенческих значений для каждого этапа
+    student_speed_stage1 = models.FloatField(verbose_name="Скорость звука (студент, этап 1, м/с)", null=True, blank=True)
+    student_gamma_stage1 = models.FloatField(verbose_name="Гамма (студент, этап 1)", null=True, blank=True)
+    student_speed_stage2 = models.FloatField(verbose_name="Скорость звука (студент, этап 2, м/с)", null=True, blank=True)
+    student_gamma_stage2 = models.FloatField(verbose_name="Гамма (студент, этап 2)", null=True, blank=True)
+    student_speed_stage3 = models.FloatField(verbose_name="Скорость звука (студент, этап 3, м/с)", null=True, blank=True)
+    student_gamma_stage3 = models.FloatField(verbose_name="Гамма (студент, этап 3)", null=True, blank=True)
+    
+    # Поля для хранения процента ошибки для каждого этапа (если нужно)
+    error_percent_speed_stage1 = models.FloatField(verbose_name="Отклонение скорости (этап 1, %)", null=True, blank=True)
+    error_percent_gamma_stage1 = models.FloatField(verbose_name="Отклонение гаммы (этап 1, %)", null=True, blank=True)
+    error_percent_speed_stage2 = models.FloatField(verbose_name="Отклонение скорости (этап 2, %)", null=True, blank=True)
+    error_percent_gamma_stage2 = models.FloatField(verbose_name="Отклонение гаммы (этап 2, %)", null=True, blank=True)
+    error_percent_speed_stage3 = models.FloatField(verbose_name="Отклонение скорости (этап 3, %)", null=True, blank=True)
+    error_percent_gamma_stage3 = models.FloatField(verbose_name="Отклонение гаммы (этап 3, %)", null=True, blank=True)
+
+    # Поля для финальной гаммы (введенной студентом как среднее по этапам) и соответствующей системной
+    student_final_gamma = models.FloatField(verbose_name="Финальная гамма (студент, среднее)", null=True, blank=True)
+    system_final_gamma = models.FloatField(verbose_name="Финальная гамма (система, среднее)", null=True, blank=True)
+    error_percent_final_gamma = models.FloatField(verbose_name="Отклонение финальной гаммы (%)", null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)  # Заменить date
     completed_at = models.DateTimeField(verbose_name="Дата и время завершения", null=True, blank=True) # Добавлено поле
@@ -325,16 +354,20 @@ class Results(models.Model):
     ]
 
     experiment = models.OneToOneField(Experiments, on_delete=models.CASCADE, primary_key=True)
-    gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ (система)", default=0.0) # Переименовал для ясности
-    speed_of_sound_calculated = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # Новое поле
-    gamma_reference = models.FloatField(verbose_name="Эталонное γ", default=1.4)
-    student_gamma = models.FloatField(verbose_name="Студенческое γ", null=True, blank=True)
-    student_speed = models.FloatField(verbose_name="Студенческая скорость звука (м/с)", null=True, blank=True) # Добавим поле
-    error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True, help_text="Процент ошибки гамма, может быть NULL") # Переименовано и уточнено
-    error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True, help_text="Процент ошибки скорости, может быть NULL") # Новое поле
+    # gamma_calculated = models.FloatField(verbose_name="Рассчитанное γ (система)", default=0.0) # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    # speed_of_sound_calculated = models.FloatField(verbose_name="Рассчитанная скорость звука (система, м/с)", null=True, blank=True) # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    gamma_reference = models.FloatField(verbose_name="Эталонное γ", default=1.4) # Это, возможно, останется как общее справочное значение
+    # student_gamma = models.FloatField(verbose_name="Студенческое γ", null=True, blank=True) # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    # student_speed = models.FloatField(verbose_name="Студенческая скорость звука (м/с)", null=True, blank=True) # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    # error_percent_gamma = models.FloatField(verbose_name="Отклонение γ студента от системного (%)", null=True, blank=True, help_text="Процент ошибки гамма, может быть NULL") # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    # error_percent_speed = models.FloatField(verbose_name="Отклонение скорости студента от системного (%)", null=True, blank=True, help_text="Процент ошибки скорости, может быть NULL") # УСТАРЕЛО, данные теперь в Experiments поэтапно
+    
+    # Возможно, здесь будут храниться обобщенные результаты или статусы, но конкретные значения по этапам теперь в Experiments
+    # Например, итоговый статус или оценка, если она будет
+
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending_student_input')
     visualization_data = models.JSONField(default=dict) # Может хранить данные для графиков студента, если они отличаются
-    detailed_results = models.JSONField(default=list) # Данные по этапам от консумера
+    detailed_results = models.JSONField(default=list) # Данные по этапам от консумера - это поле кажется важным, его нужно проверить. Возможно, сюда и должны сохраняться системные расчеты по этапам.
 
     class Meta:
         verbose_name = "Результат"
