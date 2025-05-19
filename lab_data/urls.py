@@ -12,6 +12,7 @@ urlpatterns = [
     path('login/assistant/', views.AssistantLoginView.as_view(), name='assistant_login'),
     path('logout/', views.logout_view, name='logout'),
     path('teacher/protocol/<int:experiment_id>/', views.protocol_detail_view, name='protocol_detail'),
+    path('teacher/protocol/<int:experiment_id>/download/', views.download_protocol_pdf, name='download_protocol_pdf'),
     path('group/<str:group_name>/', views.group_students_view, name='group_students'),
     path('download-manual/', views.DownloadManualView.as_view(), name='download_manual'),
     path('assistant/dashboard/', views.assistant_dashboard, name='assistant_dashboard'),

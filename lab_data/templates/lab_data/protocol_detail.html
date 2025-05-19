@@ -11,7 +11,12 @@
         </ol>
     </nav>
 
-    <h2 class="mb-4">Протокол эксперимента #{{ experiment_id }}</h2>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Протокол эксперимента #{{ experiment_id }}</h2>
+        <a href="{% url 'download_protocol_pdf' experiment_id %}" class="btn btn-primary">
+            <i class="fas fa-download"></i> Скачать PDF
+        </a>
+    </div>
 
     <div class="card">
         <div class="card-header">
@@ -26,36 +31,101 @@
                 <div class="col-md-4"><strong>Группа:</strong></div>
                 <div class="col-md-8">{{ student_group }}</div>
             </div>
+            
+            <!-- Этап 1 -->
             <hr>
-            <h5 class="mt-4 mb-3">Результаты студента:</h5>
+            <h5 class="mt-4 mb-3">Этап 1:</h5>
             <div class="row mb-2">
                 <div class="col-md-4"><strong>Введенная скорость звука:</strong></div>
-                <div class="col-md-8">{{ student_provided_speed }} м/с</div>
+                <div class="col-md-8">{{ student_speed_stage1 }} м/с</div>
             </div>
-            <div class="row mb-3">
+            <div class="row mb-2">
                 <div class="col-md-4"><strong>Введенное значение γ:</strong></div>
-                <div class="col-md-8">{{ student_provided_gamma }}</div>
+                <div class="col-md-8">{{ student_gamma_stage1 }}</div>
             </div>
-            <hr>
-            <h5 class="mt-4 mb-3">Расчетные значения системы:</h5>
             <div class="row mb-2">
                 <div class="col-md-4"><strong>Рассчитанная скорость звука:</strong></div>
-                <div class="col-md-8">{{ system_calculated_speed }} м/с</div>
+                <div class="col-md-8">{{ system_speed_stage1 }} м/с</div>
             </div>
-            <div class="row mb-3">
-                <div class="col-md-4"><strong>Рассчитанное значение γ:</strong></div>
-                <div class="col-md-8">{{ system_calculated_gamma }}</div>
-            </div>
-            <hr>
-            <h5 class="mt-4 mb-3">Отклонения:</h5>
             <div class="row mb-2">
-                <div class="col-md-4"><strong>Отклонение по скорости звука:</strong></div>
-                <div class="col-md-8">{{ error_percent_speed }}%</div>
+                <div class="col-md-4"><strong>Рассчитанное значение γ:</strong></div>
+                <div class="col-md-8">{{ system_gamma_stage1 }}</div>
             </div>
             <div class="row mb-3">
-                <div class="col-md-4"><strong>Отклонение по γ:</strong></div>
-                <div class="col-md-8">{{ error_percent_gamma }}%</div>
+                <div class="col-md-4"><strong>Отклонения:</strong></div>
+                <div class="col-md-8">
+                    Скорость: {{ error_percent_speed_stage1 }}%, γ: {{ error_percent_gamma_stage1 }}%
+                </div>
             </div>
+
+            <!-- Этап 2 -->
+            <hr>
+            <h5 class="mt-4 mb-3">Этап 2:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Введенная скорость звука:</strong></div>
+                <div class="col-md-8">{{ student_speed_stage2 }} м/с</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Введенное значение γ:</strong></div>
+                <div class="col-md-8">{{ student_gamma_stage2 }}</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Рассчитанная скорость звука:</strong></div>
+                <div class="col-md-8">{{ system_speed_stage2 }} м/с</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Рассчитанное значение γ:</strong></div>
+                <div class="col-md-8">{{ system_gamma_stage2 }}</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Отклонения:</strong></div>
+                <div class="col-md-8">
+                    Скорость: {{ error_percent_speed_stage2 }}%, γ: {{ error_percent_gamma_stage2 }}%
+                </div>
+            </div>
+
+            <!-- Этап 3 -->
+            <hr>
+            <h5 class="mt-4 mb-3">Этап 3:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Введенная скорость звука:</strong></div>
+                <div class="col-md-8">{{ student_speed_stage3 }} м/с</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Введенное значение γ:</strong></div>
+                <div class="col-md-8">{{ student_gamma_stage3 }}</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Рассчитанная скорость звука:</strong></div>
+                <div class="col-md-8">{{ system_speed_stage3 }} м/с</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Рассчитанное значение γ:</strong></div>
+                <div class="col-md-8">{{ system_gamma_stage3 }}</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Отклонения:</strong></div>
+                <div class="col-md-8">
+                    Скорость: {{ error_percent_speed_stage3 }}%, γ: {{ error_percent_gamma_stage3 }}%
+                </div>
+            </div>
+
+            <!-- Финальные результаты -->
+            <hr>
+            <h5 class="mt-4 mb-3">Финальные результаты:</h5>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Финальное значение γ (студент):</strong></div>
+                <div class="col-md-8">{{ student_final_gamma }}</div>
+            </div>
+            <div class="row mb-2">
+                <div class="col-md-4"><strong>Финальное значение γ (система):</strong></div>
+                <div class="col-md-8">{{ system_final_gamma }}</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-4"><strong>Финальное отклонение по γ:</strong></div>
+                <div class="col-md-8">{{ error_percent_final_gamma }}%</div>
+            </div>
+
             <hr>
             <div class="row mt-4">
                 <div class="col-md-4"><strong>Итоговый результат эксперимента:</strong></div>

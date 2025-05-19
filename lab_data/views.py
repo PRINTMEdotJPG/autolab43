@@ -672,7 +672,7 @@ def download_protocol(request, experiment_id):
     response['Content-Disposition'] = f'attachment; filename="protocol_{experiment_id}.pdf"'
     return response
 
-def generate_protocol_pdf(experiment, student):
+def generate_protocol_pdf(experiment, student_data):
     """Генерация PDF протокола с использованием ReportLab"""
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
@@ -693,41 +693,86 @@ def generate_protocol_pdf(experiment, student):
     # 2. Информация о студенте
     p.setFont("DejaVu", 12)
     y_position = height - margin - line_height * 2
-    p.drawString(margin, y_position, f"Студент: {student.full_name}")
+    p.drawString(margin, y_position, f"Студент: {student_data['full_name']}")
     y_position -= line_height
-    p.drawString(margin, y_position, f"Группа: {student.group_name}")
+    p.drawString(margin, y_position, f"Группа: {student_data['group_name']}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Дата: {experiment.created_at.strftime('%d.%m.%Y %H:%M')}")
     
-    # 3. Параметры эксперимента
+    # 3. Этап 1
     y_position -= line_height * 1.5
     p.setFont("DejaVu", 14)
-    p.drawString(margin, y_position, "Параметры эксперимента:")
+    p.drawString(margin, y_position, "Этап 1:")
     
     p.setFont("DejaVu", 12)
     y_position -= line_height
-    p.drawString(margin, y_position, f"Температура: {experiment.temperature} °C")
+    p.drawString(margin, y_position, f"Введенная скорость звука: {experiment.student_speed_stage1 or '-'} м/с")
     y_position -= line_height
-    p.drawString(margin, y_position, f"Частота: {experiment.frequency} Гц")
+    p.drawString(margin, y_position, f"Введенное значение γ: {experiment.student_gamma_stage1 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанная скорость звука: {experiment.system_speed_stage1 or '-'} м/с")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанное значение γ: {experiment.system_gamma_stage1 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Отклонения: Скорость: {experiment.error_percent_speed_stage1 or '-'}%, γ: {experiment.error_percent_gamma_stage1 or '-'}%")
     
-    # 4. Результаты эксперимента
+    # 4. Этап 2
     y_position -= line_height * 1.5
     p.setFont("DejaVu", 14)
-    p.drawString(margin, y_position, "Результаты:")
-    
-    # Таблица результатов
-    results = [
-        ("Параметр", "Значение"),
-        ("Скорость звука", f"{experiment.student_speed or '-'} м/с"),
-        ("Коэффициент γ", f"{experiment.student_gamma or '-'}"),
-        ("Ошибка", f"{experiment.error_percent or '-'}%")
-    ]
+    p.drawString(margin, y_position, "Этап 2:")
     
     p.setFont("DejaVu", 12)
-    for row in results:
-        y_position -= line_height
-        p.drawString(margin, y_position, row[0])
-        p.drawString(margin + 6*cm, y_position, row[1])
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Введенная скорость звука: {experiment.student_speed_stage2 or '-'} м/с")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Введенное значение γ: {experiment.student_gamma_stage2 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанная скорость звука: {experiment.system_speed_stage2 or '-'} м/с")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанное значение γ: {experiment.system_gamma_stage2 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Отклонения: Скорость: {experiment.error_percent_speed_stage2 or '-'}%, γ: {experiment.error_percent_gamma_stage2 or '-'}%")
     
-    # 5. Подпись и дата
+    # 5. Этап 3
+    y_position -= line_height * 1.5
+    p.setFont("DejaVu", 14)
+    p.drawString(margin, y_position, "Этап 3:")
+    
+    p.setFont("DejaVu", 12)
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Введенная скорость звука: {experiment.student_speed_stage3 or '-'} м/с")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Введенное значение γ: {experiment.student_gamma_stage3 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанная скорость звука: {experiment.system_speed_stage3 or '-'} м/с")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Рассчитанное значение γ: {experiment.system_gamma_stage3 or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Отклонения: Скорость: {experiment.error_percent_speed_stage3 or '-'}%, γ: {experiment.error_percent_gamma_stage3 or '-'}%")
+    
+    # 6. Финальные результаты
+    y_position -= line_height * 1.5
+    p.setFont("DejaVu", 14)
+    p.drawString(margin, y_position, "Финальные результаты:")
+    
+    p.setFont("DejaVu", 12)
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Финальное значение γ (студент): {experiment.student_final_gamma or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Финальное значение γ (система): {experiment.system_final_gamma or '-'}")
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Финальное отклонение по γ: {experiment.error_percent_final_gamma or '-'}%")
+    
+    # 7. Итоговый результат
+    y_position -= line_height * 1.5
+    p.setFont("DejaVu", 14)
+    p.drawString(margin, y_position, "Итоговый результат эксперимента:")
+    
+    p.setFont("DejaVu", 12)
+    y_position -= line_height
+    p.drawString(margin, y_position, f"Статус: {experiment.status}")
+    
+    # 8. Подпись и дата
     y_position -= line_height * 2
     p.line(margin, y_position, width - margin, y_position)
     y_position -= line_height
@@ -1482,12 +1527,33 @@ def protocol_detail_view(request, experiment_id):
         'experiment_id': experiment.id,
         'student_full_name': student.full_name,
         'student_group': student.group_name if student.group_name else "Не указана",
-        'student_provided_speed': results.student_speed if results else "Нет данных",
-        'student_provided_gamma': results.student_gamma if results else "Нет данных",
-        'system_calculated_speed': results.speed_of_sound_calculated if results else "Нет данных",
-        'system_calculated_gamma': results.gamma_calculated if results else "Нет данных",
-        'error_percent_speed': results.error_percent_speed if results and results.error_percent_speed is not None else "Нет данных",
-        'error_percent_gamma': results.error_percent_gamma if results and results.error_percent_gamma is not None else "Нет данных",
+        # Данные по этапам
+        'student_speed_stage1': experiment.student_speed_stage1 if experiment.student_speed_stage1 is not None else "Нет данных",
+        'student_gamma_stage1': experiment.student_gamma_stage1 if experiment.student_gamma_stage1 is not None else "Нет данных",
+        'system_speed_stage1': experiment.system_speed_stage1 if experiment.system_speed_stage1 is not None else "Нет данных",
+        'system_gamma_stage1': experiment.system_gamma_stage1 if experiment.system_gamma_stage1 is not None else "Нет данных",
+        'error_percent_speed_stage1': experiment.error_percent_speed_stage1 if experiment.error_percent_speed_stage1 is not None else "Нет данных",
+        'error_percent_gamma_stage1': experiment.error_percent_gamma_stage1 if experiment.error_percent_gamma_stage1 is not None else "Нет данных",
+        
+        'student_speed_stage2': experiment.student_speed_stage2 if experiment.student_speed_stage2 is not None else "Нет данных",
+        'student_gamma_stage2': experiment.student_gamma_stage2 if experiment.student_gamma_stage2 is not None else "Нет данных",
+        'system_speed_stage2': experiment.system_speed_stage2 if experiment.system_speed_stage2 is not None else "Нет данных",
+        'system_gamma_stage2': experiment.system_gamma_stage2 if experiment.system_gamma_stage2 is not None else "Нет данных",
+        'error_percent_speed_stage2': experiment.error_percent_speed_stage2 if experiment.error_percent_speed_stage2 is not None else "Нет данных",
+        'error_percent_gamma_stage2': experiment.error_percent_gamma_stage2 if experiment.error_percent_gamma_stage2 is not None else "Нет данных",
+        
+        'student_speed_stage3': experiment.student_speed_stage3 if experiment.student_speed_stage3 is not None else "Нет данных",
+        'student_gamma_stage3': experiment.student_gamma_stage3 if experiment.student_gamma_stage3 is not None else "Нет данных",
+        'system_speed_stage3': experiment.system_speed_stage3 if experiment.system_speed_stage3 is not None else "Нет данных",
+        'system_gamma_stage3': experiment.system_gamma_stage3 if experiment.system_gamma_stage3 is not None else "Нет данных",
+        'error_percent_speed_stage3': experiment.error_percent_speed_stage3 if experiment.error_percent_speed_stage3 is not None else "Нет данных",
+        'error_percent_gamma_stage3': experiment.error_percent_gamma_stage3 if experiment.error_percent_gamma_stage3 is not None else "Нет данных",
+        
+        # Финальные результаты
+        'student_final_gamma': experiment.student_final_gamma if experiment.student_final_gamma is not None else "Нет данных",
+        'system_final_gamma': experiment.system_final_gamma if experiment.system_final_gamma is not None else "Нет данных",
+        'error_percent_final_gamma': experiment.error_percent_final_gamma if experiment.error_percent_final_gamma is not None else "Нет данных",
+        
         'experiment_status_protocol': protocol_status,
         'experiment_creation_date': experiment.created_at,
         'is_teacher': True # Для общего шаблона, если нужно
@@ -1508,3 +1574,23 @@ def logout_view(request):
     messages.info(request, "Вы успешно вышли из системы.")
     logger.info(f"User {user_email} logged out successfully.")
     return redirect('login_choice') # Или другой URL для страницы входа, например, settings.LOGIN_URL
+
+@login_required
+def download_protocol_pdf(request, experiment_id):
+    """Скачивание PDF протокола эксперимента"""
+    experiment = get_object_or_404(Experiments, id=experiment_id)
+    
+    # Получаем данные студента из связанной модели User
+    student_data = {
+        'full_name': experiment.user.full_name,
+        'group_name': experiment.user.group_name
+    }
+    
+    # Генерируем PDF
+    pdf_content = generate_protocol_pdf(experiment, student_data)
+    
+    # Создаем HTTP ответ с PDF
+    response = HttpResponse(pdf_content, content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="protocol_{experiment_id}.pdf"'
+    
+    return response
