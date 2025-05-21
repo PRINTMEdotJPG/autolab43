@@ -605,7 +605,11 @@ def save_experiment_results(request, experiment_id):
         # Итоговый успех, если ВСЕ этапы успешны И финальная гамма успешна
         final_overall_status_value = 'success' if all_stages_successful and final_gamma_successful else 'fail'
         
-        results_entry.status = final_overall_status_value
+        # Если успех — фиксируем success, если нет — оставляем возможность повторного ввода
+        if final_overall_status_value == 'success':
+            results_entry.status = 'success'
+        else:
+            results_entry.status = 'pending_student_input'
         # Очистим старые поля усредненных значений в Results
         results_entry.student_speed = None 
         results_entry.student_gamma = None

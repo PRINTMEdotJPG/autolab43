@@ -37,13 +37,6 @@
         </div>
         
         <hr>
-        <h4>Отладочная информация:</h4>
-        <p>Статус обработки: <code id="results-processing-status-debug"></code></p>
-        <div id="system-results-per-stage-debug" class="mt-2">
-            <!-- Сюда будут выводиться системные результаты по этапам -->
-        </div>
-
-        <hr>
         <h4>Ваши расчеты:</h4>
         <form id="student-results-form">
             {% csrf_token %}
@@ -97,8 +90,6 @@
         </form>
         <div id="form-message" class="mt-3">
         </div>
-
-        <button type_button="button" class="btn btn-secondary mt-3" id="clear-storage-btn">Очистить сохраненные данные (для отладки)</button>
     </div>
 
     <div id="experiment-data-error" class="alert alert-danger" style="display: none;">
@@ -355,12 +346,15 @@
                         }
                     }
 
-                    if (data.results_processing_status === 'success' || data.results_processing_status === 'fail' || data.results_processing_status === 'final_completed') {
+                    if (data.results_processing_status === 'success' || data.results_processing_status === 'final_completed') {
                         studentResultsForm.querySelectorAll('input, button[type="submit"]').forEach(el => el.disabled = true);
                         let finalMessage = data.results_processing_status === 'success' || data.results_processing_status === 'final_completed' ? 
                             "<div class='alert alert-success'>Эксперимент успешно завершен. Введенные данные сохранены.</div>" :
                             "<div class='alert alert-danger'>Эксперимент завершен с ошибками. Введенные данные сохранены. Обратитесь к преподавателю, если нужна повторная попытка.</div>";
                         formMessageEl.innerHTML = finalMessage;
+                    } else if (data.results_processing_status === 'fail') {
+                        // Не блокируем форму, только показываем ошибку
+                        formMessageEl.innerHTML = "<div class='alert alert-danger'>Введённые данные некорректны. Пожалуйста, попробуйте ещё раз.</div>";
                     }
 
                 } else {
@@ -422,16 +416,6 @@
                     });
                     messageHtml += '</tbody></table>';
                     */
-
-                    // Добавляем информацию о финальной гамме
-                    if (data.final_gamma_results) {
-                        messageHtml += `<div class="alert alert-info mt-2">
-                                            Финальная гамма (студент): ${data.final_gamma_results.student_final_gamma !== null && data.final_gamma_results.student_final_gamma !== undefined ? data.final_gamma_results.student_final_gamma : 'N/A'}<br>
-                                            Финальная гамма (система): ${data.final_gamma_results.system_final_gamma !== null && data.final_gamma_results.system_final_gamma !== undefined ? data.final_gamma_results.system_final_gamma.toFixed(3) : 'N/A'}<br>
-                                            Отклонение финальной гаммы: ${data.final_gamma_results.error_percent_final_gamma !== null && data.final_gamma_results.error_percent_final_gamma !== undefined ? data.final_gamma_results.error_percent_final_gamma.toFixed(2) + '%' : 'N/A'}
-                                        </div>`;
-                    }
-
                 } else {
                     messageHtml = `<div class="alert alert-danger">Сетевая ошибка или ошибка сервера при отправке результатов: ${data.message}</div>`;
                 }
